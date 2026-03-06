@@ -46,3 +46,6 @@ htmlcov/
 # PyInstaller
 *.manifest
 *.exe
+
+# Raw data files
+raws.txt

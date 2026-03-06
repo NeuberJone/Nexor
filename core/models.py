@@ -1,11 +1,8 @@
-from __future__ import annotations
-
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
 
 
-@dataclass(slots=True, frozen=True)
+@dataclass
 class Machine:
     machine_id: str
     name: str
@@ -13,7 +10,7 @@ class Machine:
     model: str | None = None
 
 
-@dataclass(slots=True, frozen=True)
+@dataclass
 class ProductionJob:
     job_id: str
     machine: str
@@ -27,13 +24,10 @@ class ProductionJob:
     gap_before_m: float
     driver: str | None = None
     source_path: str | None = None
-    raw_fields: dict[str, Any] = field(default_factory=dict)
 
     @property
     def total_consumption_m(self) -> float:
         """
-        Medida operacional opcional:
-        comprimento do arquivo + gap técnico anterior.
-        Não substitui length_m.
+        Operational metric: printed length + technical gap.
         """
         return self.length_m + self.gap_before_m

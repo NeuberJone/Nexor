@@ -1,13 +1,9 @@
-from __future__ import annotations
-
 from datetime import datetime
-
+from core.models import ProductionJob
 from core.exceptions import LogValidationError
-from core.models import Machine, ProductionJob
 
 
-def _parse_datetime(value: str, field_name: str) -> datetime:
-    value = (value or "").strip()
+def parse_datetime(value: str):
 
     for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M"):
         try:
@@ -15,118 +11,70 @@ def _parse_datetime(value: str, field_name: str) -> datetime:
         except ValueError:
             continue
 
-    raise LogValidationError(f"Data inválida em '{field_name}': {value!r}")
+    raise LogValidationError(f"Invalid datetime: {value}")
 
 
-def _parse_float(value: str | None) -> float:
-    if value is None:
+def parse_float(value: str | None):
+
+    if not value:
         return 0.0
 
-    normalized = value.strip().replace(",", ".")
-    if not normalized:
-        return 0.0
+    value = value.replace(",", ".")
 
-    try:
-        return float(normalized)
-    except ValueError as exc:
-        raise LogValidationError(f"Valor numérico inválido: {value!r}") from exc
+    return float(value)
 
 
-def _extract_fabric(document: str) -> str | None:
-    """
-    Regra inicial simples:
-    tenta extrair tecido do padrão 'Pedido - Tecido - ...'
-    """
-    parts = [part.strip() for part in (document or "").split(" - ")]
-    if len(parts) >= 2 and parts[1]:
+def extract_fabric(document: str):
+
+    parts = document.split(" - ")
+
+    if len(parts) >= 2:
         return parts[1].upper()
+
     return None
 
 
-def _resolve_machine(
-    computer_name: str,
-    driver: str | None,
-    machine_registry: dict[str, Machine] | None,
-) -> tuple[str, str]:
-    """
-    Retorna:
-    - machine_name
-    - normalized_computer_name
-    """
-    normalized_computer_name = (computer_name or "").strip()
-    if not normalized_computer_name:
-        raise LogValidationError("Campo obrigatório ausente: ComputerName")
+def map_sections_to_job(sections: dict) -> ProductionJob:
 
-    if machine_registry and normalized_computer_name in machine_registry:
-        machine = machine_registry[normalized_computer_name]
-        return machine.name, normalized_computer_name
-
-    fallback_name = (driver or "UNKNOWN_MACHINE").strip()
-    return fallback_name, normalized_computer_name
-
-
-def map_sections_to_job(
-    sections: dict[str, dict[str, str]],
-    *,
-    machine_registry: dict[str, Machine] | None = None,
-    source_path: str | None = None,
-) -> ProductionJob:
     general = sections.get("General", {})
-    item1 = sections.get("1", {})
+    item = sections.get("1", {})
 
-    job_id = (general.get("JobID") or "").strip()
+    job_id = general.get("JobID")
+
     if not job_id:
-        raise LogValidationError("Campo obrigatório ausente: JobID")
+        raise LogValidationError("Missing JobID")
 
-    document = (
-        general.get("Document")
-        or item1.get("Name")
-        or ""
-    ).strip()
+    document = general.get("Document") or item.get("Name")
+
     if not document:
-        raise LogValidationError("Campo obrigatório ausente: Document")
+        raise LogValidationError("Missing document")
 
-    start_time = _parse_datetime(general.get("StartTime", ""), "StartTime")
-    end_time = _parse_datetime(general.get("EndTime", ""), "EndTime")
+    start_time = parse_datetime(general.get("StartTime"))
+    end_time = parse_datetime(general.get("EndTime"))
 
-    duration_seconds = int((end_time - start_time).total_seconds())
-    if duration_seconds < 0:
-        raise LogValidationError("EndTime anterior a StartTime.")
+    duration = int((end_time - start_time).total_seconds())
 
-    computer_name = general.get("ComputerName", "")
-    driver = (general.get("Driver") or "").strip() or None
-    machine_name, normalized_computer_name = _resolve_machine(
-        computer_name=computer_name,
-        driver=driver,
-        machine_registry=machine_registry,
-    )
+    if duration < 0:
+        raise LogValidationError("EndTime before StartTime")
 
-    height_mm = _parse_float(item1.get("HeightMM"))
-    vpos_mm = _parse_float(item1.get("VPosMM") or item1.get("VPositionMM"))
+    computer_name = general.get("ComputerName")
 
-    # Regra crítica:
-    # length_m = somente o comprimento real do arquivo
-    # gap_before_m = avanço técnico anterior
-    length_m = height_mm / 1000.0
-    gap_before_m = vpos_mm / 1000.0
+    height_mm = parse_float(item.get("HeightMM"))
+    vpos_mm = parse_float(item.get("VPosMM") or item.get("VPositionMM"))
+
+    length_m = height_mm / 1000
+    gap_before_m = vpos_mm / 1000
 
     return ProductionJob(
         job_id=job_id,
-        machine=machine_name,
-        computer_name=normalized_computer_name,
+        machine=general.get("Driver"),
+        computer_name=computer_name,
         document=document,
         start_time=start_time,
         end_time=end_time,
-        duration_seconds=duration_seconds,
-        fabric=_extract_fabric(document),
+        duration_seconds=duration,
+        fabric=extract_fabric(document),
         length_m=length_m,
         gap_before_m=gap_before_m,
-        driver=driver,
-        source_path=source_path,
-        raw_fields={
-            "general": general,
-            "item1": item1,
-            "height_mm": height_mm,
-            "vpos_mm": vpos_mm,
-        },
+        driver=general.get("Driver"),
     )

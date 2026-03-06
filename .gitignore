@@ -49,3 +49,6 @@ htmlcov/
 
 # Raw data files
 raws.txt
+
+# Log Import Files
+logs_import

@@ -56,7 +56,11 @@ class ProductionRepository:
     def list_all(self):
         conn = get_connection()
         rows = conn.execute(
-            "SELECT * FROM production_jobs ORDER BY start_time"
+            """
+            SELECT *
+            FROM production_jobs
+            ORDER BY start_time
+            """
         ).fetchall()
         conn.close()
         return rows

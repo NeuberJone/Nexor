@@ -27,7 +27,27 @@ class ProductionJob:
 
     @property
     def total_consumption_m(self) -> float:
-        """
-        Operational metric: printed length + technical gap.
-        """
         return self.length_m + self.gap_before_m
+
+
+@dataclass
+class LogSource:
+    id: int | None
+    name: str
+    path: str
+    recursive: bool = True
+    enabled: bool = True
+    machine_hint: str | None = None
+
+
+@dataclass
+class ImportRun:
+    id: int | None
+    source_id: int
+    started_at: datetime
+    finished_at: datetime | None = None
+    total_found: int = 0
+    imported_count: int = 0
+    duplicate_count: int = 0
+    error_count: int = 0
+    notes: str | None = None

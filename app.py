@@ -41,7 +41,7 @@ def iter_source_files(source_row):
     if source_row["recursive"]:
         return sorted(base_path.rglob("*.txt"))
 
-    return sorted(base_path.glob("*.txt"))
+    return sorted(base_path.rglob("*.txt"))
 
 
 def main():

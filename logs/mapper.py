@@ -1,4 +1,5 @@
 from datetime import datetime
+from machines.registry import resolve_machine
 
 from core.exceptions import LogValidationError
 from core.models import ProductionJob
@@ -27,7 +28,6 @@ def parse_float(value: str | None):
         return float(value)
     except ValueError as exc:
         raise LogValidationError(f"Invalid numeric value: {value}") from exc
-
 
 def extract_fabric(document: str):
     parts = document.split(" - ")
@@ -63,10 +63,19 @@ def map_sections_to_job(sections: dict, source_path: str | None = None) -> Produ
         raise LogValidationError("Missing ComputerName")
 
     driver = (general.get("Driver") or "").strip() or None
-    machine = driver or "UNKNOWN_MACHINE"
+    machine = resolve_machine(
+        computer_name=computer_name,
+        driver=driver,
+    )
 
     height_mm = parse_float(item.get("HeightMM"))
-    vpos_mm = parse_float(item.get("VPosMM") or item.get("VPositionMM"))
+
+    vpos_value = (
+        item.get("VPosMM")
+        or item.get("VPositionMM")
+    )
+
+    vpos_mm = parse_float(vpos_value)
 
     length_m = height_mm / 1000.0
     gap_before_m = vpos_mm / 1000.0

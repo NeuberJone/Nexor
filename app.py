@@ -41,7 +41,7 @@ def iter_source_files(source_row):
     if source_row["recursive"]:
         return sorted(base_path.rglob("*.txt"))
 
-    return sorted(base_path.rglob("*.txt"))
+    return sorted(base_path.glob("*.txt"))
 
 
 def main():
@@ -197,3 +197,7 @@ def main():
     print(f"Comprimento impresso: {format_meters(grand_length)} m")
     print(f"Espaço técnico: {format_meters(grand_gap)} m")
     print(f"Consumo operacional total: {format_meters(grand_length + grand_gap)} m")
+
+
+if __name__ == "__main__":
+    main()

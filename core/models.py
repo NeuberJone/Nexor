@@ -17,6 +17,11 @@ class Machine:
 class ProductionJob:
     """
     Registro estruturado de um job de impressão.
+
+    Regras importantes:
+    - length_m e gap_before_m sempre representam consumo físico / execução real.
+    - Um job pode existir no histórico e ainda assim NÃO contar como produção válida.
+    - Um job pode ser excluído do resumo de tecido e do mirror export sem ser apagado.
     """
 
     job_id: str
@@ -36,10 +41,21 @@ class ProductionJob:
     driver: str | None = None
     source_path: str | None = None
 
-    # Operational classification
+    # Classificação operacional
     job_type: str = "UNKNOWN"   # PRODUCTION | REPRINT | TEST | UNKNOWN
     is_rework: bool = False
     notes: str | None = None
+
+    # Status de impressão / qualidade do job
+    print_status: str = "OK"    # OK | STAINED | FAILED | CANCELED | TEST
+
+    # Regras de contagem operacional
+    counts_as_valid_production: bool = True
+    counts_for_fabric_summary: bool = True
+    counts_for_roll_export: bool = True
+
+    # Motivo operacional do problema, se houver
+    error_reason: str | None = None
 
     @property
     def total_consumption_m(self) -> float:

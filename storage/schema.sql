@@ -1,25 +1,118 @@
+PRAGMA foreign_keys = ON;
+
+
+-- ============================================================
+-- FONTES DE LOGS
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS log_sources (
+
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+    name TEXT NOT NULL,
+    path TEXT NOT NULL,
+
+    recursive INTEGER DEFAULT 1,
+    enabled INTEGER DEFAULT 1,
+
+    machine_hint TEXT,
+
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+
+-- ============================================================
+-- EXECUÇÕES DE IMPORTAÇÃO
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS import_runs (
+
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+    source_id INTEGER NOT NULL,
+
+    started_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    finished_at TEXT,
+
+    total_found INTEGER DEFAULT 0,
+    imported_count INTEGER DEFAULT 0,
+    duplicate_count INTEGER DEFAULT 0,
+    error_count INTEGER DEFAULT 0,
+
+    notes TEXT,
+
+    FOREIGN KEY (source_id) REFERENCES log_sources(id)
+);
+
+
+-- ============================================================
+-- ARQUIVOS PROCESSADOS
+-- ============================================================
+
+CREATE TABLE IF NOT EXISTS imported_logs (
+
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+
+    run_id INTEGER,
+    source_id INTEGER,
+
+    file_name TEXT,
+    file_path TEXT,
+
+    file_size INTEGER,
+    file_hash TEXT,
+
+    status TEXT,
+
+    detected_job_id TEXT,
+    detected_computer_name TEXT,
+    detected_machine TEXT,
+
+    error_message TEXT,
+
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (run_id) REFERENCES import_runs(id),
+    FOREIGN KEY (source_id) REFERENCES log_sources(id)
+);
+
+
+-- ============================================================
+-- JOBS DE PRODUÇÃO
+-- ============================================================
+
 CREATE TABLE IF NOT EXISTS production_jobs (
+
     id INTEGER PRIMARY KEY AUTOINCREMENT,
 
     job_id TEXT NOT NULL,
-    machine TEXT,
-    computer_name TEXT NOT NULL,
-    document TEXT NOT NULL,
 
-    start_time TEXT NOT NULL,
-    end_time TEXT NOT NULL,
-    duration_seconds INTEGER NOT NULL,
+    machine TEXT,
+    computer_name TEXT,
+
+    document TEXT,
+
+    start_time TEXT,
+    end_time TEXT,
+    duration_seconds INTEGER,
 
     fabric TEXT,
 
-    length_m REAL NOT NULL,
-    gap_before_m REAL NOT NULL,
+    planned_length_m REAL,
+    printed_length_m REAL,
+    gap_before_m REAL,
 
     driver TEXT,
     source_path TEXT,
 
-    job_type TEXT NOT NULL DEFAULT 'UNKNOWN',
-    is_rework INTEGER NOT NULL DEFAULT 0,
+    job_type TEXT DEFAULT 'UNKNOWN',
+    print_status TEXT DEFAULT 'OK',
+
+    counts_as_valid_production INTEGER DEFAULT 1,
+    counts_for_fabric_summary INTEGER DEFAULT 1,
+    counts_for_roll_export INTEGER DEFAULT 1,
+
+    error_reason TEXT,
     notes TEXT,
 
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
@@ -27,54 +120,16 @@ CREATE TABLE IF NOT EXISTS production_jobs (
     UNIQUE(job_id, computer_name, start_time)
 );
 
-CREATE TABLE IF NOT EXISTS log_sources (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
 
-    name TEXT NOT NULL,
-    path TEXT NOT NULL,
-    recursive INTEGER NOT NULL DEFAULT 1,
-    enabled INTEGER NOT NULL DEFAULT 1,
-    machine_hint TEXT,
-    created_at TEXT DEFAULT CURRENT_TIMESTAMP
-);
+-- ============================================================
+-- ÍNDICES IMPORTANTES
+-- ============================================================
 
-CREATE TABLE IF NOT EXISTS import_runs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+CREATE INDEX IF NOT EXISTS idx_jobs_start_time
+ON production_jobs(start_time);
 
-    source_id INTEGER NOT NULL,
-    started_at TEXT NOT NULL,
-    finished_at TEXT,
-    total_found INTEGER NOT NULL DEFAULT 0,
-    imported_count INTEGER NOT NULL DEFAULT 0,
-    duplicate_count INTEGER NOT NULL DEFAULT 0,
-    error_count INTEGER NOT NULL DEFAULT 0,
-    notes TEXT,
+CREATE INDEX IF NOT EXISTS idx_jobs_machine
+ON production_jobs(machine);
 
-    FOREIGN KEY (source_id) REFERENCES log_sources(id)
-);
-
-CREATE TABLE IF NOT EXISTS imported_logs (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-
-    run_id INTEGER NOT NULL,
-    source_id INTEGER NOT NULL,
-
-    file_name TEXT NOT NULL,
-    file_path TEXT NOT NULL,
-    file_size INTEGER,
-    file_hash TEXT,
-
-    status TEXT NOT NULL,
-    error_message TEXT,
-
-    detected_job_id TEXT,
-    detected_computer_name TEXT,
-    detected_machine TEXT,
-
-    imported_at TEXT DEFAULT CURRENT_TIMESTAMP,
-
-    FOREIGN KEY (run_id) REFERENCES import_runs(id),
-    FOREIGN KEY (source_id) REFERENCES log_sources(id),
-
-    UNIQUE(file_path, file_hash)
-);
+CREATE INDEX IF NOT EXISTS idx_jobs_fabric
+ON production_jobs(fabric);

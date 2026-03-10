@@ -18,10 +18,20 @@ class ProductionJob:
     """
     Registro estruturado de um job de impressão.
 
+    planned_length_m:
+        Tamanho planejado/original do arquivo enviado para impressão.
+
+    printed_length_m:
+        Quanto realmente saiu da máquina.
+
+    gap_before_m:
+        Avanço técnico antes da impressão.
+
     Regras importantes:
-    - length_m e gap_before_m sempre representam consumo físico / execução real.
-    - Um job pode existir no histórico e ainda assim NÃO contar como produção válida.
-    - Um job pode ser excluído do resumo de tecido e do mirror export sem ser apagado.
+    - planned_length_m representa o tamanho do job/arquivo.
+    - printed_length_m representa a metragem efetivamente impressa.
+    - um job pode existir no histórico e ainda assim não contar como produção válida.
+    - um job pode ser excluído do resumo de tecido e do roll export sem ser apagado.
     """
 
     job_id: str
@@ -35,7 +45,8 @@ class ProductionJob:
 
     fabric: str | None
 
-    length_m: float
+    planned_length_m: float
+    printed_length_m: float
     gap_before_m: float
 
     driver: str | None = None
@@ -61,9 +72,9 @@ class ProductionJob:
     def total_consumption_m(self) -> float:
         """
         Consumo operacional total do job.
-        Comprimento impresso + espaço técnico antes.
+        Metragem realmente impressa + espaço técnico antes.
         """
-        return self.length_m + self.gap_before_m
+        return self.printed_length_m + self.gap_before_m
 
 
 @dataclass

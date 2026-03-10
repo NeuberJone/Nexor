@@ -15,6 +15,11 @@ def format_meters(value: float) -> str:
 def format_duration(seconds: int) -> str:
     hours = seconds // 3600
     minutes = (seconds % 3600) // 60
+    secs = seconds % 60
+
+    if hours == 0 and minutes == 0:
+        return f"{secs:02d}s"
+
     return f"{hours:02d}h{minutes:02d}min"
 
 
@@ -64,7 +69,9 @@ def main():
     grand_imported = 0
     grand_duplicates = 0
     grand_errors = 0
-    grand_length = 0.0
+
+    grand_planned_length = 0.0
+    grand_printed_length = 0.0
     grand_gap = 0.0
 
     for source in sources:
@@ -85,7 +92,9 @@ def main():
         imported = 0
         duplicates = 0
         errors = 0
-        total_length = 0.0
+
+        total_planned_length = 0.0
+        total_printed_length = 0.0
         total_gap = 0.0
 
         for file in files:
@@ -104,7 +113,8 @@ def main():
                 print(f"Fim: {format_datetime(job.end_time)}")
                 print(f"Duração: {format_duration(job.duration_seconds)}")
                 print(f"Tecido: {job.fabric or '-'}")
-                print(f"Comprimento impresso: {format_meters(job.length_m)} m")
+                print(f"Tamanho do arquivo: {format_meters(job.planned_length_m)} m")
+                print(f"Comprimento impresso: {format_meters(job.printed_length_m)} m")
                 print(f"Espaço técnico antes: {format_meters(job.gap_before_m)} m")
                 print(f"Consumo operacional total: {format_meters(job.total_consumption_m)} m")
 
@@ -112,7 +122,8 @@ def main():
 
                 if saved:
                     imported += 1
-                    total_length += job.length_m
+                    total_planned_length += job.planned_length_m
+                    total_printed_length += job.printed_length_m
                     total_gap += job.gap_before_m
                     status = "IMPORTED"
                     print("Status: IMPORTADO")
@@ -175,16 +186,19 @@ def main():
         print(f"Importados: {imported}")
         print(f"Duplicados: {duplicates}")
         print(f"Erros: {errors}")
-        print(f"Comprimento impresso: {format_meters(total_length)} m")
+        print(f"Tamanho total dos arquivos: {format_meters(total_planned_length)} m")
+        print(f"Comprimento impresso: {format_meters(total_printed_length)} m")
         print(f"Espaço técnico: {format_meters(total_gap)} m")
-        print(f"Consumo operacional total: {format_meters(total_length + total_gap)} m")
+        print(f"Consumo operacional total: {format_meters(total_printed_length + total_gap)} m")
         print()
 
         grand_total_found += total
         grand_imported += imported
         grand_duplicates += duplicates
         grand_errors += errors
-        grand_length += total_length
+
+        grand_planned_length += total_planned_length
+        grand_printed_length += total_printed_length
         grand_gap += total_gap
 
     print("=" * 60)
@@ -194,9 +208,10 @@ def main():
     print(f"Importados: {grand_imported}")
     print(f"Duplicados: {grand_duplicates}")
     print(f"Erros: {grand_errors}")
-    print(f"Comprimento impresso: {format_meters(grand_length)} m")
+    print(f"Tamanho total dos arquivos: {format_meters(grand_planned_length)} m")
+    print(f"Comprimento impresso: {format_meters(grand_printed_length)} m")
     print(f"Espaço técnico: {format_meters(grand_gap)} m")
-    print(f"Consumo operacional total: {format_meters(grand_length + grand_gap)} m")
+    print(f"Consumo operacional total: {format_meters(grand_printed_length + grand_gap)} m")
 
 
 if __name__ == "__main__":

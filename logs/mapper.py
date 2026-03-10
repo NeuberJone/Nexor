@@ -1,8 +1,8 @@
 from datetime import datetime
-from machines.registry import resolve_machine
 
 from core.exceptions import LogValidationError
 from core.models import ProductionJob
+from machines.registry import resolve_machine
 
 
 def parse_datetime(value: str):
@@ -28,6 +28,7 @@ def parse_float(value: str | None):
         return float(value)
     except ValueError as exc:
         raise LogValidationError(f"Invalid numeric value: {value}") from exc
+
 
 def extract_fabric(document: str):
     parts = document.split(" - ")
@@ -63,6 +64,7 @@ def map_sections_to_job(sections: dict, source_path: str | None = None) -> Produ
         raise LogValidationError("Missing ComputerName")
 
     driver = (general.get("Driver") or "").strip() or None
+
     machine = resolve_machine(
         computer_name=computer_name,
         driver=driver,
@@ -74,9 +76,11 @@ def map_sections_to_job(sections: dict, source_path: str | None = None) -> Produ
         item.get("VPosMM")
         or item.get("VPositionMM")
     )
-
     vpos_mm = parse_float(vpos_value)
 
+    # Regra crítica do Nexor:
+    # length_m = somente o comprimento real do arquivo
+    # gap_before_m = avanço técnico antes da impressão
     length_m = height_mm / 1000.0
     gap_before_m = vpos_mm / 1000.0
 
@@ -93,4 +97,7 @@ def map_sections_to_job(sections: dict, source_path: str | None = None) -> Produ
         gap_before_m=gap_before_m,
         driver=driver,
         source_path=source_path,
+        job_type="UNKNOWN",
+        is_rework=False,
+        notes=None,
     )

@@ -18,6 +18,10 @@ CREATE TABLE IF NOT EXISTS production_jobs (
     driver TEXT,
     source_path TEXT,
 
+    job_type TEXT NOT NULL DEFAULT 'UNKNOWN',
+    is_rework INTEGER NOT NULL DEFAULT 0,
+    notes TEXT,
+
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
 
     UNIQUE(job_id, computer_name, start_time)

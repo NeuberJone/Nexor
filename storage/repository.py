@@ -24,9 +24,12 @@ class ProductionRepository:
                     length_m,
                     gap_before_m,
                     driver,
-                    source_path
+                    source_path,
+                    job_type,
+                    is_rework,
+                    notes
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job.job_id,
@@ -41,6 +44,9 @@ class ProductionRepository:
                     job.gap_before_m,
                     job.driver,
                     job.source_path,
+                    job.job_type,
+                    int(job.is_rework),
+                    job.notes,
                 ),
             )
 
@@ -92,6 +98,32 @@ class ProductionRepository:
             ORDER BY start_time
             """,
             (day,),
+        ).fetchall()
+        conn.close()
+        return rows
+
+    def list_production_only(self):
+        conn = get_connection()
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM production_jobs
+            WHERE job_type = 'PRODUCTION'
+            ORDER BY start_time
+            """
+        ).fetchall()
+        conn.close()
+        return rows
+
+    def list_rework_only(self):
+        conn = get_connection()
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM production_jobs
+            WHERE is_rework = 1
+            ORDER BY start_time
+            """
         ).fetchall()
         conn.close()
         return rows

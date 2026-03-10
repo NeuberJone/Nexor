@@ -36,6 +36,11 @@ class ProductionJob:
     driver: str | None = None
     source_path: str | None = None
 
+    # Operational classification
+    job_type: str = "UNKNOWN"   # PRODUCTION | REPRINT | TEST | UNKNOWN
+    is_rework: bool = False
+    notes: str | None = None
+
     @property
     def total_consumption_m(self) -> float:
         """
@@ -51,14 +56,11 @@ class LogSource:
     Fonte de logs cadastrada no Nexor.
     Pode ser uma pasta local ou de rede.
     """
-
     id: int | None
     name: str
     path: str
-
     recursive: bool = True
     enabled: bool = True
-
     machine_hint: str | None = None
 
 
@@ -67,16 +69,12 @@ class ImportRun:
     """
     Execução de importação de logs.
     """
-
     id: int | None
     source_id: int
-
     started_at: datetime
     finished_at: datetime | None = None
-
     total_found: int = 0
     imported_count: int = 0
     duplicate_count: int = 0
     error_count: int = 0
-
     notes: str | None = None

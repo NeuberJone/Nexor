@@ -19,19 +19,19 @@ class ProductionJob:
     Registro estruturado de um job de impressão.
 
     planned_length_m:
-        Tamanho planejado/original do arquivo enviado para impressão.
+        Tamanho planejado/original do arquivo enviado.
 
-    printed_length_m:
-        Quanto realmente saiu da máquina.
+    consumed_length_m:
+        Quanto a máquina efetivamente consumiu segundo o log de custo.
+        Em muitos casos isso já inclui o avanço técnico anterior.
 
     gap_before_m:
         Avanço técnico antes da impressão.
 
-    Regras importantes:
-    - planned_length_m representa o tamanho do job/arquivo.
-    - printed_length_m representa a metragem efetivamente impressa.
-    - um job pode existir no histórico e ainda assim não contar como produção válida.
-    - um job pode ser excluído do resumo de tecido e do roll export sem ser apagado.
+    actual_printed_length_m:
+        Quanto realmente corresponde à arte impressa.
+        Regra:
+            actual_printed_length_m = max(consumed_length_m - gap_before_m, 0)
     """
 
     job_id: str
@@ -46,35 +46,32 @@ class ProductionJob:
     fabric: str | None
 
     planned_length_m: float
-    printed_length_m: float
+    consumed_length_m: float
     gap_before_m: float
 
     driver: str | None = None
     source_path: str | None = None
 
-    # Classificação operacional
-    job_type: str = "UNKNOWN"   # PRODUCTION | REPRINT | TEST | UNKNOWN
+    job_type: str = "UNKNOWN"
     is_rework: bool = False
     notes: str | None = None
 
-    # Status de impressão / qualidade do job
-    print_status: str = "OK"    # OK | STAINED | FAILED | CANCELED | TEST
+    print_status: str = "OK"
 
-    # Regras de contagem operacional
     counts_as_valid_production: bool = True
     counts_for_fabric_summary: bool = True
     counts_for_roll_export: bool = True
 
-    # Motivo operacional do problema, se houver
     error_reason: str | None = None
 
     @property
+    def actual_printed_length_m(self) -> float:
+        value = self.consumed_length_m - self.gap_before_m
+        return value if value > 0 else 0.0
+
+    @property
     def total_consumption_m(self) -> float:
-        """
-        Consumo operacional total do job.
-        Metragem realmente impressa + espaço técnico antes.
-        """
-        return self.printed_length_m + self.gap_before_m
+        return self.consumed_length_m
 
 
 @dataclass

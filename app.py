@@ -1,3 +1,4 @@
+import argparse
 import hashlib
 from pathlib import Path
 
@@ -37,20 +38,60 @@ def compute_file_hash(path: Path) -> str:
     return sha.hexdigest()
 
 
-def iter_source_files(source_row):
+def iter_source_files(source_row, force_rescan: bool = False):
     base_path = Path(source_row["path"])
 
     if not base_path.exists():
         return []
 
     if source_row["recursive"]:
-        return sorted(base_path.rglob("*.txt"))
+        candidates = sorted(base_path.rglob("*.txt"))
+    else:
+        candidates = sorted(base_path.glob("*.txt"))
 
-    return sorted(base_path.glob("*.txt"))
+    if force_rescan:
+        return candidates
+
+    last_mtime = source_row["last_successful_mtime"]
+
+    if last_mtime is None:
+        return candidates
+
+    new_files = []
+
+    for file in candidates:
+        try:
+            mtime = file.stat().st_mtime
+        except Exception:
+            continue
+
+        if mtime > last_mtime:
+            new_files.append(file)
+
+    return new_files
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Nexor log import engine"
+    )
+
+    parser.add_argument(
+        "--force-rescan",
+        action="store_true",
+        help="Ignora o checkpoint das fontes e relê todos os logs.",
+    )
+
+    return parser.parse_args()
 
 
 def main():
+    args = parse_args()
+
     print("\nNEXOR LOG IMPORT\n")
+
+    if args.force_rescan:
+        print("Modo: FORCE RESCAN (releitura completa das fontes)\n")
 
     init_database()
 
@@ -71,8 +112,9 @@ def main():
     grand_errors = 0
 
     grand_planned_length = 0.0
-    grand_printed_length = 0.0
+    grand_consumed_length = 0.0
     grand_gap = 0.0
+    grand_actual_printed = 0.0
 
     for source in sources:
         print("=" * 60)
@@ -80,11 +122,16 @@ def main():
         print(f"Caminho: {source['path']}")
         print("=" * 60)
 
-        files = iter_source_files(source)
+        source_repo.update_last_scan_at(source["id"])
+
+        files = iter_source_files(source, force_rescan=args.force_rescan)
         total = len(files)
 
         if not files:
-            print("Nenhum arquivo encontrado nesta fonte.\n")
+            if args.force_rescan:
+                print("Nenhum arquivo encontrado nesta fonte.\n")
+            else:
+                print("Nenhum arquivo novo encontrado nesta fonte.\n")
             continue
 
         run_id = audit_repo.start_run(source["id"])
@@ -94,11 +141,15 @@ def main():
         errors = 0
 
         total_planned_length = 0.0
-        total_printed_length = 0.0
+        total_consumed_length = 0.0
         total_gap = 0.0
+        total_actual_printed = 0.0
+
+        max_successful_mtime = source["last_successful_mtime"]
 
         for file in files:
             try:
+                file_mtime = file.stat().st_mtime
                 file_hash = compute_file_hash(file)
                 file_size = file.stat().st_size
 
@@ -114,8 +165,9 @@ def main():
                 print(f"Duração: {format_duration(job.duration_seconds)}")
                 print(f"Tecido: {job.fabric or '-'}")
                 print(f"Tamanho do arquivo: {format_meters(job.planned_length_m)} m")
-                print(f"Comprimento impresso: {format_meters(job.printed_length_m)} m")
+                print(f"Consumo medido no log: {format_meters(job.consumed_length_m)} m")
                 print(f"Espaço técnico antes: {format_meters(job.gap_before_m)} m")
+                print(f"Impresso real da arte: {format_meters(job.actual_printed_length_m)} m")
                 print(f"Consumo operacional total: {format_meters(job.total_consumption_m)} m")
 
                 saved = production_repo.save(job)
@@ -123,9 +175,14 @@ def main():
                 if saved:
                     imported += 1
                     total_planned_length += job.planned_length_m
-                    total_printed_length += job.printed_length_m
+                    total_consumed_length += job.consumed_length_m
                     total_gap += job.gap_before_m
+                    total_actual_printed += job.actual_printed_length_m
                     status = "IMPORTED"
+
+                    if max_successful_mtime is None or file_mtime > max_successful_mtime:
+                        max_successful_mtime = file_mtime
+
                     print("Status: IMPORTADO")
                 else:
                     duplicates += 1
@@ -172,6 +229,9 @@ def main():
                 print("Status: ERRO")
                 print(f"Motivo: {e}\n")
 
+        if max_successful_mtime is not None:
+            source_repo.update_last_successful_mtime(source["id"], max_successful_mtime)
+
         audit_repo.finish_run(
             run_id,
             total_found=total,
@@ -187,9 +247,10 @@ def main():
         print(f"Duplicados: {duplicates}")
         print(f"Erros: {errors}")
         print(f"Tamanho total dos arquivos: {format_meters(total_planned_length)} m")
-        print(f"Comprimento impresso: {format_meters(total_printed_length)} m")
+        print(f"Consumo medido no log: {format_meters(total_consumed_length)} m")
         print(f"Espaço técnico: {format_meters(total_gap)} m")
-        print(f"Consumo operacional total: {format_meters(total_printed_length + total_gap)} m")
+        print(f"Impresso real da arte: {format_meters(total_actual_printed)} m")
+        print(f"Consumo operacional total: {format_meters(total_consumed_length)} m")
         print()
 
         grand_total_found += total
@@ -198,8 +259,9 @@ def main():
         grand_errors += errors
 
         grand_planned_length += total_planned_length
-        grand_printed_length += total_printed_length
+        grand_consumed_length += total_consumed_length
         grand_gap += total_gap
+        grand_actual_printed += total_actual_printed
 
     print("=" * 60)
     print("RESUMO GERAL")
@@ -209,9 +271,10 @@ def main():
     print(f"Duplicados: {grand_duplicates}")
     print(f"Erros: {grand_errors}")
     print(f"Tamanho total dos arquivos: {format_meters(grand_planned_length)} m")
-    print(f"Comprimento impresso: {format_meters(grand_printed_length)} m")
+    print(f"Consumo medido no log: {format_meters(grand_consumed_length)} m")
     print(f"Espaço técnico: {format_meters(grand_gap)} m")
-    print(f"Consumo operacional total: {format_meters(grand_printed_length + grand_gap)} m")
+    print(f"Impresso real da arte: {format_meters(grand_actual_printed)} m")
+    print(f"Consumo operacional total: {format_meters(grand_consumed_length)} m")
 
 
 if __name__ == "__main__":

@@ -17,6 +17,9 @@ CREATE TABLE IF NOT EXISTS log_sources (
 
     machine_hint TEXT,
 
+    last_scan_at TEXT,
+    last_successful_mtime REAL,
+
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -99,7 +102,7 @@ CREATE TABLE IF NOT EXISTS production_jobs (
     fabric TEXT,
 
     planned_length_m REAL,
-    printed_length_m REAL,
+    consumed_length_m REAL,
     gap_before_m REAL,
 
     driver TEXT,
@@ -133,3 +136,9 @@ ON production_jobs(machine);
 
 CREATE INDEX IF NOT EXISTS idx_jobs_fabric
 ON production_jobs(fabric);
+
+CREATE INDEX IF NOT EXISTS idx_imported_logs_source_id
+ON imported_logs(source_id);
+
+CREATE INDEX IF NOT EXISTS idx_log_sources_enabled
+ON log_sources(enabled);

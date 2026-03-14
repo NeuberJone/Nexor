@@ -1,3 +1,5 @@
+import re
+
 from datetime import datetime
 
 from core.models import ProductionJob
@@ -30,11 +32,21 @@ def parse_float(value: str | None):
         raise LogValidationError(f"Invalid numeric value: {value}")
 
 
+def normalize_fabric_name(value: str | None):
+    if not value:
+        return None
+
+    value = value.strip().upper()
+    value = re.sub(r"\s+", " ", value)
+
+    return value or None
+
+
 def extract_fabric(document: str):
     parts = document.split(" - ")
 
     if len(parts) >= 2:
-        return parts[1].strip().upper()
+        return normalize_fabric_name(parts[1])
 
     return None
 

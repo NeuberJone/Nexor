@@ -26,7 +26,6 @@ def fmt_speed(value):
 
 
 def fmt_duration(seconds):
-
     hours = seconds // 3600
     minutes = (seconds % 3600) // 60
     secs = seconds % 60
@@ -42,7 +41,6 @@ def fmt_duration(seconds):
 # ============================================================
 
 def print_summary_block(title, summary):
-
     print("=" * 60)
     print(title)
     print("=" * 60)
@@ -50,8 +48,9 @@ def print_summary_block(title, summary):
     print(f"Jobs: {summary['total_jobs']}")
 
     print(f"Tamanho total dos arquivos: {fmt_m(summary['total_planned_length_m'])}")
-    print(f"Comprimento impresso: {fmt_m(summary['total_printed_length_m'])}")
+    print(f"Consumo medido no log: {fmt_m(summary['total_consumed_length_m'])}")
     print(f"Espaço técnico: {fmt_m(summary['total_gap_m'])}")
+    print(f"Impresso real da arte: {fmt_m(summary['total_actual_printed_m'])}")
     print(f"Consumo operacional total: {fmt_m(summary['total_consumption_m'])}")
 
     print()
@@ -77,7 +76,8 @@ def print_summary_block(title, summary):
     print()
 
     print(f"Jobs com erro: {summary['error_jobs_count']}")
-    print(f"Metragem em jobs com erro: {fmt_m(summary['error_printed_m'])}")
+    print(f"Metragem real em jobs com erro: {fmt_m(summary['error_actual_printed_m'])}")
+    print(f"Consumo em jobs com erro: {fmt_m(summary['error_consumed_m'])}")
 
     print()
 
@@ -87,9 +87,7 @@ def print_summary_block(title, summary):
 # ============================================================
 
 def main():
-
     repo = ProductionRepository()
-
     rows = repo.list_all()
 
     if not rows:
@@ -97,97 +95,60 @@ def main():
         return
 
     overall = summarize_jobs(rows)
-
     views = split_operational_views(rows)
-
     by_machine = summarize_by_machine(rows)
-
     by_fabric = summarize_by_fabric(rows)
-
     by_day = summarize_by_day(rows)
 
-    # ============================================================
-    # RESUMO GERAL
-    # ============================================================
-
     print_summary_block("RESUMO GERAL", overall)
-
-    # ============================================================
-    # PRODUÇÃO VÁLIDA
-    # ============================================================
-
     print_summary_block("VISÃO: PRODUÇÃO VÁLIDA", views["valid_production"])
-
-    # ============================================================
-    # JOBS COM ERRO
-    # ============================================================
-
     print_summary_block("VISÃO: JOBS COM ERRO", views["error_jobs"])
-
-    # ============================================================
-    # POR MÁQUINA
-    # ============================================================
 
     print("=" * 60)
     print("POR MÁQUINA")
     print("=" * 60)
 
     for item in by_machine:
-
         print(
             f"{item['machine']}: "
             f"jobs={item['total_jobs']} | "
             f"planejado={fmt_m(item['total_planned_length_m'])} | "
-            f"impresso={fmt_m(item['total_printed_length_m'])} | "
-            f"consumo={fmt_m(item['total_consumption_m'])} | "
+            f"consumido={fmt_m(item['total_consumed_length_m'])} | "
+            f"impresso real={fmt_m(item['total_actual_printed_m'])} | "
             f"eficiência útil={fmt_pct(item['useful_efficiency_percent'])}"
         )
 
     print()
-
-    # ============================================================
-    # POR TECIDO
-    # ============================================================
 
     print("=" * 60)
     print("POR TECIDO")
     print("=" * 60)
 
     for item in by_fabric:
-
         print(
             f"{item['fabric']}: "
             f"jobs={item['total_jobs']} | "
             f"planejado={fmt_m(item['total_planned_length_m'])} | "
-            f"impresso={fmt_m(item['total_printed_length_m'])} | "
-            f"consumo={fmt_m(item['total_consumption_m'])}"
+            f"consumido={fmt_m(item['total_consumed_length_m'])} | "
+            f"impresso real={fmt_m(item['total_actual_printed_m'])}"
         )
 
     print()
-
-    # ============================================================
-    # POR DIA
-    # ============================================================
 
     print("=" * 60)
     print("POR DIA")
     print("=" * 60)
 
     for item in by_day:
-
         print(
             f"{item['day']}: "
             f"jobs={item['total_jobs']} | "
             f"planejado={fmt_m(item['total_planned_length_m'])} | "
-            f"impresso={fmt_m(item['total_printed_length_m'])} | "
-            f"consumo={fmt_m(item['total_consumption_m'])}"
+            f"consumido={fmt_m(item['total_consumed_length_m'])} | "
+            f"impresso real={fmt_m(item['total_actual_printed_m'])}"
         )
 
     print()
-
-    # ============================================================
-    # JOBS SUSPEITOS
-    # ============================================================
 
     suspects = views["suspect_jobs"]
 
@@ -199,7 +160,6 @@ def main():
     print()
 
     for job in suspects:
-
         reasons = "; ".join(job["suspect_reasons"])
 
         print(
@@ -210,16 +170,15 @@ def main():
 
         print(
             f"Planejado: {fmt_m(job['planned_length_m'])} | "
-            f"Impresso: {fmt_m(job['printed_length_m'])} | "
+            f"Consumido: {fmt_m(job['consumed_length_m'])} | "
+            f"Gap: {fmt_m(job['gap_before_m'])} | "
+            f"Impresso real: {fmt_m(job['actual_printed_length_m'])} | "
             f"Velocidade: {fmt_speed(job['speed_m_per_min'])}"
         )
 
         print(f"Motivos: {reasons}")
-
         print("-" * 60)
 
-
-# ============================================================
 
 if __name__ == "__main__":
     main()

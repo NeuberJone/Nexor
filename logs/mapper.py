@@ -34,10 +34,9 @@ def extract_fabric(document: str):
     parts = document.split(" - ")
 
     if len(parts) >= 2:
-        return parts[1].upper()
+        return parts[1].strip().upper()
 
     return None
-
 
 def map_sections_to_job(sections: dict, source_path: str | None = None) -> ProductionJob:
     general = sections.get("General", {})

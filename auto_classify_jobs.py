@@ -1,69 +1,164 @@
-from analytics.production_metrics import detect_suspect_jobs
-from storage.repository import ProductionRepository
+from __future__ import annotations
+
+import argparse
+from dataclasses import dataclass
+from pathlib import Path
+
+from check_metrics import (
+    DEFAULT_TABLE_NAME,
+    DEFAULT_THRESHOLDS,
+    JobSnapshot,
+    SuspicionDecision,
+    build_job_snapshots,
+    classify_suspicion,
+    connect_db,
+    fetch_job_rows,
+    format_m,
+    format_ratio,
+    is_candidate_eligible,
+    resolve_default_db_path,
+)
 
 
-def fmt_m(value):
-    return f"{value:.2f}".replace(".", ",") + " m"
+@dataclass(frozen=True)
+class ClassifiedCandidate:
+    job: JobSnapshot
+    decision: SuspicionDecision
 
 
-def fmt_pct(value):
-    return f"{value * 100:.2f}".replace(".", ",") + "%"
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Classifica automaticamente jobs suspeitos sem aplicar mudanças no banco."
+    )
+    parser.add_argument(
+        "--db",
+        type=Path,
+        default=resolve_default_db_path(),
+        help="Caminho do banco SQLite. Padrão: tenta localizar nexor.db automaticamente.",
+    )
+    parser.add_argument(
+        "--table",
+        default=DEFAULT_TABLE_NAME,
+        help=f"Nome da tabela de jobs. Padrão: {DEFAULT_TABLE_NAME}",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Quantidade máxima de itens exibidos por categoria. Padrão: 50.",
+    )
+    return parser.parse_args()
 
 
-def classify_job(job):
-    planned = float(job.get("planned_length_m") or 0)
-    actual = float(job.get("actual_printed_length_m") or 0)
+def collect_candidates(
+    jobs: list[JobSnapshot],
+) -> tuple[list[ClassifiedCandidate], list[ClassifiedCandidate]]:
+    aborted: list[ClassifiedCandidate] = []
+    partial: list[ClassifiedCandidate] = []
 
-    if planned <= 0:
-        return "INVALID_PLANNED", "Planned length is zero or missing"
+    for job in jobs:
+        if not is_candidate_eligible(job):
+            continue
 
-    ratio = actual / planned
+        decision = classify_suspicion(
+            planned_length_m=job.planned_length_m,
+            actual_printed_length_m=job.actual_printed_length_m,
+            thresholds=DEFAULT_THRESHOLDS,
+        )
 
-    if ratio < 0.20:
-        return "ABORTED_CANDIDATE", "Very low actual/planned ratio"
-    if ratio < 0.95:
-        return "PARTIAL_CANDIDATE", "Partial actual/planned ratio"
-    return "COMPLETE_CANDIDATE", "Looks complete"
+        if decision.category == "ABORTED_CANDIDATE":
+            aborted.append(ClassifiedCandidate(job=job, decision=decision))
+        elif decision.category == "PARTIAL_CANDIDATE":
+            partial.append(ClassifiedCandidate(job=job, decision=decision))
+
+    aborted.sort(
+        key=lambda item: (
+            item.decision.ratio if item.decision.ratio is not None else 999.0,
+            -item.decision.missing_length_m,
+            item.job.start_time or "",
+            item.job.job_id,
+        )
+    )
+    partial.sort(
+        key=lambda item: (
+            item.decision.ratio if item.decision.ratio is not None else 999.0,
+            -item.decision.missing_length_m,
+            item.job.start_time or "",
+            item.job.job_id,
+        )
+    )
+
+    return aborted, partial
 
 
-def main():
-    repo = ProductionRepository()
-    rows = repo.list_all()
+def print_header(title: str) -> None:
+    print("=" * 70)
+    print(title)
+    print("=" * 70)
 
-    suspects = detect_suspect_jobs(rows, ratio_threshold=0.95)
 
-    if not suspects:
-        print("Nenhum job classificado como suspeito/parcial.")
+def print_group(
+    title: str,
+    items: list[ClassifiedCandidate],
+    limit: int,
+) -> None:
+    print(f"\n{title}: {len(items)}")
+
+    if not items:
         return
 
-    print("=" * 70)
-    print("CLASSIFICAÇÃO AUTOMÁTICA DE JOBS")
-    print("=" * 70)
-    print()
+    for candidate in items[:limit]:
+        job = candidate.job
+        decision = candidate.decision
 
-    for job in suspects:
-        classification, reason = classify_job(job)
+        print(
+            f"- {job.job_id} | {job.document} | {job.start_time or '-'} | "
+            f"planned={format_m(job.planned_length_m)} | "
+            f"actual={format_m(job.actual_printed_length_m)} | "
+            f"gap={format_m(job.gap_before_m)} | "
+            f"consumed={format_m(job.consumed_length_m)} | "
+            f"ratio={format_ratio(decision.ratio)} | "
+            f"missing={format_m(decision.missing_length_m)} | "
+            f"{decision.category}"
+        )
 
-        planned = float(job.get("planned_length_m") or 0)
-        consumed = float(job.get("consumed_length_m") or 0)
-        gap = float(job.get("gap_before_m") or 0)
-        actual = float(job.get("actual_printed_length_m") or 0)
-        ratio = (actual / planned) if planned > 0 else 0.0
+    remaining = len(items) - limit
+    if remaining > 0:
+        print(f"... e mais {remaining} item(ns).")
 
-        print(f"Job ID: {job['job_id']}")
-        print(f"Máquina: {job['machine']}")
-        print(f"ComputerName: {job['computer_name']}")
-        print(f"Documento: {job['document']}")
-        print(f"Start: {job['start_time']}")
-        print(f"Planejado: {fmt_m(planned)}")
-        print(f"Consumido: {fmt_m(consumed)}")
-        print(f"Gap: {fmt_m(gap)}")
-        print(f"Impresso real: {fmt_m(actual)}")
-        print(f"Relação actual/planned: {fmt_pct(ratio)}")
-        print(f"Classificação sugerida: {classification}")
-        print(f"Motivo: {reason}")
-        print("-" * 70)
+
+def main() -> int:
+    args = parse_args()
+
+    try:
+        with connect_db(args.db) as conn:
+            rows = fetch_job_rows(conn, args.table)
+    except Exception as exc:
+        print_header("AUTO CLASSIFICATION")
+        print(f"Erro ao ler o banco: {exc}")
+        return 1
+
+    jobs = build_job_snapshots(rows)
+    aborted_candidates, partial_candidates = collect_candidates(jobs)
+
+    print_header("AUTO CLASSIFICATION")
+    print(f"Banco: {args.db}")
+    print(f"Tabela: {args.table}")
+    print(
+        "Regra unificada: suspeita baseada em planned_length_m x actual_printed_length_m "
+        f"(min_planned={DEFAULT_THRESHOLDS.min_planned_length_m:.2f} m, "
+        f"aborted_ratio<={DEFAULT_THRESHOLDS.aborted_max_ratio:.0%}, "
+        f"partial_ratio<{DEFAULT_THRESHOLDS.partial_max_ratio:.0%})"
+    )
+
+    print_group("Abortados candidatos", aborted_candidates, args.limit)
+    print_group("Parciais candidatos", partial_candidates, args.limit)
+
+    print("\nModo preview. Nada foi alterado no banco.")
+    print("Use apply_auto_classification.py --apply para marcar apenas os ABORTED_CANDIDATE como FAILED.")
+
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -48,7 +48,7 @@ htmlcov/
 *.exe
 
 # Raw data files
-raws.txt
+Nexor Raws.txt
 
 # Log Import Files
 logs_import

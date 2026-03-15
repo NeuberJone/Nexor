@@ -1,111 +1,103 @@
+from __future__ import annotations
+
 import argparse
+from pathlib import Path
 
-from analytics.production_metrics import detect_suspect_jobs
-from storage.repository import ProductionRepository
-
-
-def classify_job(job):
-    planned = float(job.get("planned_length_m") or 0)
-    actual = float(job.get("actual_printed_length_m") or 0)
-
-    if planned <= 0:
-        return "INVALID_PLANNED", "Planned length is zero or missing"
-
-    ratio = actual / planned
-
-    if ratio < 0.20:
-        return "ABORTED_CANDIDATE", "Very low actual/planned ratio"
-    if ratio < 0.95:
-        return "PARTIAL_CANDIDATE", "Partial actual/planned ratio"
-    return "COMPLETE_CANDIDATE", "Looks complete"
+from analytics.production_metrics import (
+    apply_failed_status_to_aborted_candidates,
+    collect_candidates,
+    load_jobs_from_db,
+    print_candidates_block,
+    resolve_default_db_path,
+)
 
 
-def main():
+def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Apply automatic classification to Nexor jobs"
+        description="Aplica classificação automática apenas para ABORTED_CANDIDATE."
+    )
+    parser.add_argument(
+        "--db",
+        type=Path,
+        default=resolve_default_db_path(),
+        help="Caminho do banco SQLite.",
+    )
+    parser.add_argument(
+        "--table",
+        default=None,
+        help="Nome da tabela de jobs. Se omitido, o script tenta descobrir automaticamente.",
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Quantidade máxima de itens exibidos por categoria.",
+    )
+    parser.add_argument(
+        "--compact",
+        action="store_true",
+        help="Exibe versão compacta do preview.",
     )
     parser.add_argument(
         "--apply",
         action="store_true",
-        help="Aplica no banco os candidatos a abortado.",
+        help="Aplica no banco apenas os ABORTED_CANDIDATE.",
     )
-    args = parser.parse_args()
+    return parser.parse_args()
 
-    repo = ProductionRepository()
-    rows = repo.list_all()
 
-    suspects = detect_suspect_jobs(rows, ratio_threshold=0.95)
+def main() -> int:
+    args = parse_args()
 
-    if not suspects:
-        print("Nenhum job suspeito encontrado.")
-        return
+    try:
+        conn, resolved_table, jobs = load_jobs_from_db(args.db, args.table)
+    except Exception as exc:
+        print("=" * 70)
+        print("APPLY AUTO CLASSIFICATION")
+        print("=" * 70)
+        print(f"Erro ao ler o banco: {exc}")
+        return 1
 
-    aborted = []
-    partial = []
+    try:
+        aborted_candidates, partial_candidates = collect_candidates(jobs)
 
-    for job in suspects:
-        classification, reason = classify_job(job)
+        print("=" * 70)
+        print("APPLY AUTO CLASSIFICATION")
+        print("=" * 70)
+        print(f"Banco: {args.db}")
+        print(f"Tabela: {resolved_table}")
 
-        record = {
-            "job_id": job["job_id"],
-            "computer_name": job["computer_name"],
-            "start_time": job["start_time"],
-            "document": job["document"],
-            "classification": classification,
-            "reason": reason,
-        }
+        if args.compact:
+            print(f"\nAbortados candidatos: {len(aborted_candidates)}")
+            for candidate in aborted_candidates[: args.limit]:
+                job = candidate.job
+                print(f"- {job.job_id} | {job.document} | {job.start_time or '-'} | ABORTED_CANDIDATE")
 
-        if classification == "ABORTED_CANDIDATE":
-            aborted.append(record)
-        elif classification == "PARTIAL_CANDIDATE":
-            partial.append(record)
+            print(f"\nParciais candidatos: {len(partial_candidates)}")
+            for candidate in partial_candidates[: args.limit]:
+                job = candidate.job
+                print(f"- {job.job_id} | {job.document} | {job.start_time or '-'} | PARTIAL_CANDIDATE")
+        else:
+            print_candidates_block("Abortados candidatos", aborted_candidates, args.limit)
+            print_candidates_block("Parciais candidatos", partial_candidates, args.limit)
 
-    print("=" * 70)
-    print("AUTO CLASSIFICATION")
-    print("=" * 70)
-    print()
+        if not args.apply:
+            print("\nModo preview. Nada foi alterado no banco.")
+            print("Use --apply para marcar apenas os ABORTED_CANDIDATE como FAILED.")
+            return 0
 
-    print(f"Abortados candidatos: {len(aborted)}")
-    for item in aborted:
-        print(
-            f"- {item['job_id']} | {item['document']} | "
-            f"{item['start_time']} | {item['classification']}"
+        applied = apply_failed_status_to_aborted_candidates(
+            conn=conn,
+            table_name=resolved_table,
+            candidates=aborted_candidates,
         )
 
-    print()
-    print(f"Parciais candidatos: {len(partial)}")
-    for item in partial:
-        print(
-            f"- {item['job_id']} | {item['document']} | "
-            f"{item['start_time']} | {item['classification']}"
-        )
-
-    if not args.apply:
-        print()
-        print("Modo preview. Nada foi alterado no banco.")
-        print("Use --apply para marcar apenas os ABORTED_CANDIDATE como FAILED.")
-        return
-
-    print()
-    print("Aplicando marcação automática nos ABORTED_CANDIDATE...")
-    print()
-
-    updated = 0
-
-    for item in aborted:
-        count = repo.mark_as_failed(
-            job_id=item["job_id"],
-            computer_name=item["computer_name"],
-            start_time_iso=item["start_time"],
-            reason="AUTO_ABORTED_CANDIDATE",
-            notes="Marcado automaticamente por baixa relação actual/planned",
-        )
-        updated += count
-        print(f"- {item['job_id']} atualizado: {count}")
-
-    print()
-    print(f"Total de registros atualizados: {updated}")
+        print(f"\nAplicação concluída. Jobs marcados como FAILED: {applied}")
+        print("PARTIAL_CANDIDATE continua apenas como sugestão, sem autoaplicação.")
+        return 0
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

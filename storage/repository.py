@@ -32,7 +32,7 @@ def _to_bool(value: object, default: bool = False) -> bool:
     if text in {"1", "true", "yes", "sim", "y"}:
         return True
     if text in {"0", "false", "no", "nao", "não", "n"}:
-        return False
+            return False
     return default
 
 
@@ -76,13 +76,26 @@ class ProductionRepository:
         columns = self.table_columns(conn)
         return "id" if "id" in columns else "rowid"
 
-    def ensure_review_fields(self, conn: sqlite3.Connection | None = None) -> None:
+    def _updated_at_trigger_name(self) -> str:
+        return f"trg_{self.table_name}_updated_at"
+
+    def ensure_runtime_fields(self, conn: sqlite3.Connection | None = None) -> None:
+        """
+        Garante que o banco atual tenha todos os campos necessários para:
+        - created_at / updated_at
+        - suspicion_*
+        - review_*
+        - trigger de updated_at
+        """
         owns_connection = conn is None
         conn = conn or self.connect()
 
         try:
             existing = self.table_columns(conn)
+
             desired_columns = {
+                "created_at": "TEXT",
+                "updated_at": "TEXT",
                 "suspicion_category": "TEXT",
                 "suspicion_reason": "TEXT",
                 "suspicion_ratio": "REAL",
@@ -95,6 +108,7 @@ class ProductionRepository:
             }
 
             applied_any = False
+
             for column_name, column_type in desired_columns.items():
                 if column_name in existing:
                     continue
@@ -103,11 +117,60 @@ class ProductionRepository:
                 )
                 applied_any = True
 
-            if applied_any:
-                conn.commit()
+            existing = self.table_columns(conn)
+
+            if "created_at" in existing:
+                conn.execute(
+                    f"""
+                    UPDATE {self.table_name}
+                    SET created_at = COALESCE(created_at, CURRENT_TIMESTAMP)
+                    WHERE created_at IS NULL
+                    """
+                )
+
+            if "updated_at" in existing:
+                conn.execute(
+                    f"""
+                    UPDATE {self.table_name}
+                    SET updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP)
+                    WHERE updated_at IS NULL
+                    """
+                )
+
+            self._ensure_updated_at_trigger(conn)
+            conn.commit()
         finally:
             if owns_connection:
                 conn.close()
+
+    def ensure_review_fields(self, conn: sqlite3.Connection | None = None) -> None:
+        """
+        Mantido por compatibilidade com chamadas antigas.
+        """
+        self.ensure_runtime_fields(conn)
+
+    def _ensure_updated_at_trigger(self, conn: sqlite3.Connection) -> None:
+        columns = self.table_columns(conn)
+        trigger_name = self._updated_at_trigger_name()
+
+        conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
+
+        if "updated_at" not in columns:
+            return
+
+        conn.execute(
+            f"""
+            CREATE TRIGGER IF NOT EXISTS {trigger_name}
+            AFTER UPDATE ON {self.table_name}
+            FOR EACH ROW
+            WHEN NEW.updated_at = OLD.updated_at
+            BEGIN
+                UPDATE {self.table_name}
+                SET updated_at = CURRENT_TIMESTAMP
+                WHERE rowid = OLD.rowid;
+            END;
+            """
+        )
 
     def row_to_job(self, row: sqlite3.Row) -> ProductionJob:
         actual_printed = None
@@ -179,6 +242,8 @@ class ProductionRepository:
 
     def list_jobs(self, limit: int | None = None) -> list[ProductionJob]:
         with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+
             sql = f"SELECT * FROM {self.table_name} ORDER BY start_time, job_id"
             params: tuple[object, ...] = ()
 
@@ -191,6 +256,7 @@ class ProductionRepository:
 
     def save_job(self, job: ProductionJob) -> int:
         with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
             columns = self.table_columns(conn)
             now_iso = _now_iso()
 
@@ -267,7 +333,7 @@ class ProductionRepository:
         preserve_reviewed: bool = True,
     ) -> None:
         with self.connect() as conn:
-            self.ensure_review_fields(conn)
+            self.ensure_runtime_fields(conn)
             columns = self.table_columns(conn)
             pk_column = self._pk_column(conn)
 
@@ -310,7 +376,7 @@ class ProductionRepository:
 
     def clear_stale_pending_suspicions(self, active_row_ids: set[int]) -> int:
         with self.connect() as conn:
-            self.ensure_review_fields(conn)
+            self.ensure_runtime_fields(conn)
             columns = self.table_columns(conn)
             pk_column = self._pk_column(conn)
 
@@ -369,7 +435,7 @@ class ProductionRepository:
         reviewed_by: str | None = None,
     ) -> None:
         with self.connect() as conn:
-            self.ensure_review_fields(conn)
+            self.ensure_runtime_fields(conn)
             columns = self.table_columns(conn)
             pk_column = self._pk_column(conn)
 
@@ -395,7 +461,7 @@ class ProductionRepository:
 
     def list_pending_reviews(self) -> list[ProductionJob]:
         with self.connect() as conn:
-            self.ensure_review_fields(conn)
+            self.ensure_runtime_fields(conn)
 
             rows = conn.execute(
                 f"""

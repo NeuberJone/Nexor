@@ -54,6 +54,22 @@ def parse_args() -> argparse.Namespace:
         help="Nome ou código de quem revisou.",
     )
     parser.add_argument(
+        "--sync-operational-status",
+        action="store_true",
+        help=(
+            "Quando usado com REVIEWED_FAILED, também sincroniza o status operacional "
+            "do job para FAILED e zera os flags de produção."
+        ),
+    )
+    parser.add_argument(
+        "--operational-error-reason",
+        default=None,
+        help=(
+            "Motivo operacional a gravar em error_reason ao sincronizar "
+            "REVIEWED_FAILED. Se omitido, usa REVIEW_CONFIRMED_FAILED quando vazio."
+        ),
+    )
+    parser.add_argument(
         "--apply",
         action="store_true",
         help="Aplica a revisão no banco. Sem isso, roda só em preview.",
@@ -122,9 +138,11 @@ def find_target_job(repo: ProductionRepository, job_row_id: int | None, job_id: 
     raise ValueError("Job não encontrado.")
 
 
-def render_preview(job, next_status: str, note: str | None, reviewed_by: str | None) -> str:
+def render_preview(job, next_status: str, note: str | None, reviewed_by: str | None, sync_operational_status: bool, operational_error_reason: str | None) -> str:
     effective = effective_printed_length(job)
     live_category, live_reason, live_ratio, live_missing = live_metric_snapshot(job)
+
+    will_sync_failed = sync_operational_status and next_status == REVIEWED_FAILED
 
     lines = [
         "=" * 70,
@@ -159,7 +177,15 @@ def render_preview(job, next_status: str, note: str | None, reviewed_by: str | N
         f"Novo review_status: {next_status}",
         f"Nova note: {note or '-'}",
         f"Novo reviewed_by: {reviewed_by or '-'}",
+        "",
+        f"Sincronizar status operacional: {'SIM' if will_sync_failed else 'NÃO'}",
+        f"Novo print_status operacional: {'FAILED' if will_sync_failed else (job.print_status or '-')}",
+        f"Novo error_reason operacional: {operational_error_reason or 'REVIEW_CONFIRMED_FAILED' if will_sync_failed else '-'}",
     ]
+
+    if sync_operational_status and next_status != REVIEWED_FAILED:
+        lines.append("")
+        lines.append("Aviso: --sync-operational-status só tem efeito com --status REVIEWED_FAILED.")
 
     return "\n".join(lines)
 
@@ -182,7 +208,16 @@ def main() -> int:
         print(f"Erro ao localizar job: {exc}")
         return 1
 
-    print(render_preview(target, args.status, args.note, args.reviewed_by))
+    print(
+        render_preview(
+            target,
+            args.status,
+            args.note,
+            args.reviewed_by,
+            args.sync_operational_status,
+            args.operational_error_reason,
+        )
+    )
 
     if not args.apply:
         print("\nModo preview. Nada foi alterado no banco.")
@@ -199,6 +234,13 @@ def main() -> int:
             review_note=args.note,
             reviewed_by=args.reviewed_by,
         )
+
+        if args.sync_operational_status and args.status == REVIEWED_FAILED:
+            repo.apply_review_failed_operational_effects(
+                row_id=int(target.id),
+                error_reason=args.operational_error_reason,
+            )
+
     except Exception as exc:
         print(f"\nErro ao gravar revisão: {exc}")
         return 1

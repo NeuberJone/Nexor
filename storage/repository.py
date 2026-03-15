@@ -32,7 +32,7 @@ def _to_bool(value: object, default: bool = False) -> bool:
     if text in {"1", "true", "yes", "sim", "y"}:
         return True
     if text in {"0", "false", "no", "nao", "não", "n"}:
-            return False
+        return False
     return default
 
 
@@ -107,15 +107,12 @@ class ProductionRepository:
                 "reviewed_at": "TEXT",
             }
 
-            applied_any = False
-
             for column_name, column_type in desired_columns.items():
                 if column_name in existing:
                     continue
                 conn.execute(
                     f"ALTER TABLE {self.table_name} ADD COLUMN {column_name} {column_type}"
                 )
-                applied_any = True
 
             existing = self.table_columns(conn)
 
@@ -448,6 +445,67 @@ class ProductionRepository:
 
             if "updated_at" in columns:
                 fields["updated_at"] = _now_iso()
+
+            set_clause = ", ".join(f"{name} = ?" for name in fields.keys())
+            params = [fields[name] for name in fields.keys()]
+            params.append(row_id)
+
+            conn.execute(
+                f"UPDATE {self.table_name} SET {set_clause} WHERE {pk_column} = ?",
+                params,
+            )
+            conn.commit()
+
+    def apply_review_failed_operational_effects(
+        self,
+        row_id: int,
+        error_reason: str | None = None,
+    ) -> None:
+        """
+        Sincroniza a revisão REVIEWED_FAILED com o status operacional do job.
+        Só deve ser usado quando a falha tiver sido confirmada manualmente.
+        """
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            columns = self.table_columns(conn)
+            pk_column = self._pk_column(conn)
+
+            current_row = conn.execute(
+                f"""
+                SELECT error_reason
+                FROM {self.table_name}
+                WHERE {pk_column} = ?
+                """,
+                (row_id,),
+            ).fetchone()
+
+            current_error_reason = current_row["error_reason"] if current_row else None
+
+            fields: dict[str, object] = {}
+
+            if "print_status" in columns:
+                fields["print_status"] = "FAILED"
+
+            if "counts_as_valid_production" in columns:
+                fields["counts_as_valid_production"] = 0
+
+            if "counts_for_fabric_summary" in columns:
+                fields["counts_for_fabric_summary"] = 0
+
+            if "counts_for_roll_export" in columns:
+                fields["counts_for_roll_export"] = 0
+
+            if "error_reason" in columns:
+                if error_reason is not None and str(error_reason).strip():
+                    fields["error_reason"] = error_reason
+                elif not (current_error_reason or "").strip():
+                    fields["error_reason"] = "REVIEW_CONFIRMED_FAILED"
+
+            if "updated_at" in columns:
+                fields["updated_at"] = _now_iso()
+
+            if not fields:
+                return
 
             set_clause = ", ".join(f"{name} = ?" for name in fields.keys())
             params = [fields[name] for name in fields.keys()]

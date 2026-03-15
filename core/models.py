@@ -1,12 +1,17 @@
+from __future__ import annotations
+
 from dataclasses import dataclass
 from datetime import datetime
 
 
+REVIEW_PENDING = "PENDING_REVIEW"
+REVIEWED_OK = "REVIEWED_OK"
+REVIEWED_PARTIAL = "REVIEWED_PARTIAL"
+REVIEWED_FAILED = "REVIEWED_FAILED"
+
+
 @dataclass
 class Machine:
-    """
-    Representa uma máquina de impressão registrada no sistema.
-    """
     machine_id: str
     name: str
     computer_name: str
@@ -15,59 +20,59 @@ class Machine:
 
 @dataclass
 class ProductionJob:
-    """
-    Registro estruturado de um job de impressão.
-
-    planned_length_m:
-        Tamanho planejado/original do arquivo enviado.
-
-    consumed_length_m:
-        Quanto a máquina efetivamente consumiu segundo o log de custo.
-        Em muitos casos isso já inclui o avanço técnico anterior.
-
-    gap_before_m:
-        Avanço técnico antes da impressão.
-
-    actual_printed_length_m:
-        Quanto realmente corresponde à arte impressa.
-        Regra:
-            actual_printed_length_m = max(consumed_length_m - gap_before_m, 0)
-    """
-
+    id: int | None
     job_id: str
     machine: str
     computer_name: str
     document: str
-
     start_time: datetime
     end_time: datetime
     duration_seconds: int
-
     fabric: str | None
-
     planned_length_m: float
-    consumed_length_m: float
+    actual_printed_length_m: float
     gap_before_m: float
+    consumed_length_m: float
 
     driver: str | None = None
     source_path: str | None = None
 
+    # Classificação operacional
     job_type: str = "UNKNOWN"
     is_rework: bool = False
     notes: str | None = None
 
+    # Status do job
     print_status: str = "OK"
-
     counts_as_valid_production: bool = True
     counts_for_fabric_summary: bool = True
     counts_for_roll_export: bool = True
-
     error_reason: str | None = None
 
+    # Campos operacionais opcionais
+    operator_code: str | None = None
+    operator_name: str | None = None
+    replacement_index: int | None = None
+
+    # Suspeita automática
+    suspicion_category: str | None = None
+    suspicion_reason: str | None = None
+    suspicion_ratio: float | None = None
+    suspicion_missing_length_m: float | None = None
+    suspicion_marked_at: datetime | None = None
+
+    # Revisão humana
+    review_status: str | None = None
+    review_note: str | None = None
+    reviewed_by: str | None = None
+    reviewed_at: datetime | None = None
+
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
     @property
-    def actual_printed_length_m(self) -> float:
-        value = self.consumed_length_m - self.gap_before_m
-        return value if value > 0 else 0.0
+    def printed_length_m(self) -> float:
+        return self.actual_printed_length_m
 
     @property
     def total_consumption_m(self) -> float:
@@ -76,10 +81,6 @@ class ProductionJob:
 
 @dataclass
 class LogSource:
-    """
-    Fonte de logs cadastrada no Nexor.
-    Pode ser uma pasta local ou de rede.
-    """
     id: int | None
     name: str
     path: str
@@ -90,9 +91,6 @@ class LogSource:
 
 @dataclass
 class ImportRun:
-    """
-    Execução de importação de logs.
-    """
     id: int | None
     source_id: int
     started_at: datetime

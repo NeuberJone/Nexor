@@ -19,7 +19,7 @@ CREATE TABLE IF NOT EXISTS production_jobs (
     driver TEXT,
     source_path TEXT,
 
-    job_type TEXT NOT NULL DEFAULT 'UNKNOWN',
+    job_type TEXT NOT NULL DEFAULT 'PRODUCTION',
     is_rework INTEGER NOT NULL DEFAULT 0,
     notes TEXT,
 

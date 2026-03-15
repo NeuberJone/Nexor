@@ -182,7 +182,7 @@ def row_to_job_snapshot(row: sqlite3.Row) -> JobSnapshot:
         fabric=row_value(row, "fabric"),
         print_status=safe_text(row, "print_status", fallback="OK").upper(),
         error_reason=row_value(row, "error_reason"),
-        job_type=safe_text(row, "job_type", fallback="UNKNOWN").upper(),
+        job_type=safe_text(row, "job_type", fallback="PRODUCTION").upper(),
         counts_as_valid_production=row_bool(row, "counts_as_valid_production", default=True),
         counts_for_fabric_summary=row_bool(row, "counts_for_fabric_summary", default=True),
         counts_for_roll_export=row_bool(row, "counts_for_roll_export", default=True),

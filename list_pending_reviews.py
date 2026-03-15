@@ -42,6 +42,18 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def display_job_type(job_type: str | None) -> str:
+    value = (job_type or "").strip().upper()
+
+    if value == "PRODUCTION":
+        return "Produção"
+
+    if value == "REPLACEMENT":
+        return "Reposição"
+
+    return job_type or "-"
+
+
 def effective_printed_length(job) -> float:
     actual = max(float(job.actual_printed_length_m or 0.0), 0.0)
     if actual > 0:
@@ -107,7 +119,7 @@ def render_block(job) -> str:
         f"Computador: {job.computer_name or '-'}",
         f"Tecido: {job.fabric or '-'}",
         f"Status atual: {job.print_status or '-'}",
-        f"Tipo: {job.job_type or '-'}",
+        f"Tipo: {display_job_type(job.job_type)}",
         "",
         f"Planejado: {format_m(job.planned_length_m)} m",
         f"Impresso bruto: {format_m(job.actual_printed_length_m)} m",

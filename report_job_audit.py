@@ -58,6 +58,18 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def display_job_type(job_type: str | None) -> str:
+    value = (job_type or "").strip().upper()
+
+    if value == "PRODUCTION":
+        return "Produção"
+
+    if value == "REPLACEMENT":
+        return "Reposição"
+
+    return job_type or "-"
+
+
 def review_state(job: JobSnapshot) -> str:
     """
     Situação operacional do job para fins de revisão.
@@ -67,7 +79,6 @@ def review_state(job: JobSnapshot) -> str:
     if job.planned_length_m <= 0:
         return "SKIPPED_NO_PLANNED_LENGTH"
 
-    # Primeiro, razões operacionais explícitas
     if job.print_status == "FAILED":
         return "SKIPPED_ALREADY_FAILED"
 
@@ -77,16 +88,16 @@ def review_state(job: JobSnapshot) -> str:
     if job.print_status == "TEST" or job.job_type == "TEST":
         return "SKIPPED_TEST"
 
-    # Depois, flags derivadas
     if not job.counts_as_valid_production:
         return "SKIPPED_INVALID_PRODUCTION"
 
     return "ELIGIBLE_FOR_REVIEW"
 
+
 def metric_classification(job: JobSnapshot) -> tuple[str, str | None, float | None, float]:
     """
     Classificação do Nexor baseada na metragem/efetivo.
-    Essa classificação deve existir mesmo para jobs já FAILED.
+    Essa classificação existe mesmo para jobs já FAILED.
     """
     decision = classify_job(job)
 
@@ -142,7 +153,7 @@ def print_job_block(job: JobSnapshot) -> str:
         f"Computador: {job.computer_name or '-'}",
         f"Tecido: {job.fabric or '-'}",
         f"Status: {job.print_status or '-'}",
-        f"Tipo: {job.job_type or '-'}",
+        f"Tipo: {display_job_type(job.job_type)}",
         "",
         f"Planejado: {format_m(job.planned_length_m)} m",
         f"Impresso bruto: {format_m(job.actual_printed_length_m)} m",

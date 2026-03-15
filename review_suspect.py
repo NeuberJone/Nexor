@@ -10,9 +10,9 @@ from storage.repository import ProductionRepository
 
 
 ALLOWED_REVIEW_STATUSES = {
+    REVIEWED_FAILED,
     REVIEWED_OK,
     REVIEWED_PARTIAL,
-    REVIEWED_FAILED,
 }
 
 
@@ -59,6 +59,18 @@ def parse_args() -> argparse.Namespace:
         help="Aplica a revisão no banco. Sem isso, roda só em preview.",
     )
     return parser.parse_args()
+
+
+def display_job_type(job_type: str | None) -> str:
+    value = (job_type or "").strip().upper()
+
+    if value == "PRODUCTION":
+        return "Produção"
+
+    if value == "REPLACEMENT":
+        return "Reposição"
+
+    return job_type or "-"
 
 
 def effective_printed_length(job) -> float:
@@ -125,7 +137,7 @@ def render_preview(job, next_status: str, note: str | None, reviewed_by: str | N
         f"Máquina: {job.machine or '-'}",
         f"Tecido: {job.fabric or '-'}",
         f"Status atual do job: {job.print_status or '-'}",
-        f"Tipo: {job.job_type or '-'}",
+        f"Tipo: {display_job_type(job.job_type)}",
         "",
         f"Planejado: {format_m(job.planned_length_m)} m",
         f"Impresso bruto: {format_m(job.actual_printed_length_m)} m",

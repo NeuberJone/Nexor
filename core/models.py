@@ -38,7 +38,7 @@ class ProductionJob:
     source_path: str | None = None
 
     # Classificação operacional
-    job_type: str = "UNKNOWN"
+    job_type: str = "PRODUCTION"
     is_rework: bool = False
     notes: str | None = None
 

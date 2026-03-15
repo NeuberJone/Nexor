@@ -209,7 +209,7 @@ class ProductionRepository:
             consumed_length_m=consumed,
             driver=row["driver"] if "driver" in row.keys() else None,
             source_path=row["source_path"] if "source_path" in row.keys() else None,
-            job_type=(row["job_type"] or "UNKNOWN") if "job_type" in row.keys() else "UNKNOWN",
+            job_type=(row["job_type"] or "PRODUCTION") if "job_type" in row.keys() else "PRODUCTION",
             is_rework=_to_bool(row["is_rework"], default=False) if "is_rework" in row.keys() else False,
             notes=row["notes"] if "notes" in row.keys() else None,
             print_status=(row["print_status"] or "OK") if "print_status" in row.keys() else "OK",

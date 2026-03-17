@@ -1,315 +1,503 @@
 # Nexor
 
-**Centro de controle da produção de impressão têxtil**
+**Nexor** é uma plataforma operacional para produção têxtil, projetada para transformar eventos reais de produção em informação estruturada, auditável e útil para a rotina diária.
 
-Nexor é uma plataforma de gestão e inteligência operacional para ambientes de produção de impressão têxtil.
-
-O sistema transforma dados de produção em informação estruturada para monitorar, rastrear, planejar e otimizar a operação. Seu ponto de partida são os logs gerados pelas máquinas, mas sua proposta vai além da leitura de logs: o Nexor foi concebido como uma base operacional para produção, relatórios, planejamento e análise de eficiência.
+O projeto nasce com foco em **rastreamento operacional**, **fechamento de rolos**, **consulta histórica**, **planejamento de produção**, **cadastros estruturados**, **estoque** e **evolução para uma arquitetura híbrida local-first**.
 
 ---
 
-## Visão
+## Visão do projeto
 
-Operações de impressão têxtil frequentemente dependem de processos fragmentados:
+O Nexor não é um hub genérico de utilitários.
+Ele foi concebido como uma plataforma de operação e inteligência de produção, atuando entre o planejamento e a execução.
 
-* logs dispersos nas máquinas
-* controle manual de produção
-* baixa visibilidade da produtividade real
-* dificuldade de rastrear o que foi produzido
-* pouca padronização na geração de relatórios
-* dificuldade de reaproveitar materiais e consolidar informações operacionais
+Sua proposta é sair da lógica de ferramentas isoladas e consolidar um fluxo mais maduro, onde logs, jobs, rolos, máquinas, operadores, tecidos e planejamento passam a fazer parte de um mesmo sistema.
 
-O Nexor centraliza esses dados e os transforma em inteligência operacional.
+### Definição resumida
 
-O objetivo é permitir que líderes de produção tenham uma visão clara de:
-
-* o que foi produzido
-* quanto foi produzido
-* quanto tempo levou
-* como os rolos foram organizados
-* quanto foi consumido na operação
-* como melhorar a eficiência do processo
+**Nexor = núcleo operacional de produção + cadastros estruturados + consulta auditável + planejamento + estoque + evolução híbrida local-first.**
 
 ---
 
-## Categoria do Sistema
+## O que o Nexor é
 
-O Nexor se enquadra na categoria de sistemas industriais conhecidos como **MES — Manufacturing Execution System**.
+* Uma base operacional para acompanhar a produção real
+* Um sistema centrado em logs, jobs e rolos
+* Uma plataforma com foco em rastreabilidade
+* Uma estrutura preparada para crescer com planejamento, estoque e analytics
+* Um produto pensado para uso local, intuitivo e instalável
 
-Arquitetura conceitual:
+## O que o Nexor não é
 
-ERP
-↓
-MES (Nexor)
-↓
-Máquinas / Produção
-
-O Nexor atua entre o planejamento e a execução da produção, conectando:
-
-* máquinas
-* logs de impressão
-* relatórios operacionais
-* planejamento de fila
-* métricas de produtividade
-* análise de consumo
+* Não é uma cópia do Jocasta
+* Não é a absorção completa do ecossistema PX
+* Não é apenas um leitor de logs
+* Não é apenas uma tela bonita sobre dados soltos
+* Não é um sistema dependente de internet para funcionar
 
 ---
 
-## Proposta do Sistema
+## Referências de origem
 
-O Nexor foi pensado para operar como uma plataforma modular de produção têxtil, com foco em quatro frentes principais:
+O Nexor aproveita referências funcionais específicas do ecossistema PX, mas mantém identidade própria.
 
-### 1. Rastreabilidade da produção
+### Referências diretas
 
-Transformar eventos de máquina em registros organizados, auditáveis e fáceis de consultar.
+* **PXPrintLogs**
+* **PXSearchOrders**
+* **PXPrintCalc**
 
-### 2. Padronização operacional
+### Como essas referências entram no projeto
 
-Gerar relatórios e arquivos de apoio em formatos consistentes, reduzindo erros e retrabalho.
+#### PXPrintLogs
 
-### 3. Planejamento de produção
+Inspira:
 
-Permitir montagem de filas por tecido, controle de rolos e aproveitamento de material disponível.
+* leitura operacional dos logs
+* fluxo prático de produção
+* exportações em PDF
+* exportações em JPG mirror
+* visão voltada ao uso real no ambiente produtivo
 
-### 4. Inteligência operacional
+#### PXSearchOrders
 
-Produzir métricas de produtividade, consumo e eficiência para apoiar decisões de produção.
+Inspira:
+
+* tela de consulta
+* busca por registros já salvos
+* conferência histórica
+* recuperação e revisão de dados operacionais
+
+#### PXPrintCalc
+
+Inspira parcialmente:
+
+* cálculos auxiliares
+* lógica de metragem
+* estimativas futuras para planejamento de produção
+
+### Importante
+
+O restante dos módulos PX/Jocasta **não entra automaticamente no Nexor**.
+O projeto deve crescer com base no seu próprio domínio, não por acúmulo de módulos externos.
 
 ---
 
-## Estrutura do Projeto
+## Problema que o Nexor resolve
 
-```text
-nexor/
- ├ core/
- ├ logs/
- ├ planner/
- ├ analytics/
- ├ agent/
- ├ docs/
- └ app.py
-```
+Em muitas rotinas produtivas, a informação existe, mas está fragmentada:
 
-### core
+* logs ficam soltos em pastas
+* o fechamento operacional depende de processos manuais
+* a conferência de rolos não está centralizada
+* histórico e reexportação exigem retrabalho
+* planejamento e estoque ficam desconectados da execução
 
-Infraestrutura central do sistema.
+O Nexor busca resolver isso transformando a produção em um fluxo contínuo e estruturado.
 
-Responsável por:
+---
 
-* modelos de dados
-* exceções
-* configuração do sistema
-* utilidades compartilhadas
-* regras centrais de domínio
+## Objetivos do projeto
 
-### logs
+* Ler logs de produção de forma automática a partir de uma origem configurada
+* Estruturar e consolidar jobs e rolos com rastreabilidade
+* Permitir fechamento operacional de rolos com revisão e exportação
+* Facilitar busca, auditoria e reexportação de registros
+* Preparar base para planejamento de produção por tecido e capacidade
+* Integrar futuramente estoque, analytics e sincronização híbrida
 
-Importação e processamento de logs de produção.
+---
 
-Responsável por:
+## Princípios do produto
 
-* leitura de arquivos `.txt`
-* parsing de dados
-* cálculo de duração
-* identificação de máquina
-* normalização de registros
-* rastreabilidade da produção
-* tratamento de reposições
+### Operação primeiro
 
-### planner
+O Nexor deve priorizar o fluxo real da produção antes de buscar sofisticação visual ou excesso de recursos.
 
-Planejamento da fila de produção.
+### Modelo antes da interface
 
-Recursos previstos:
+A UI deve nascer do domínio e do fluxo do usuário, não de improviso visual.
+
+### Local-first
+
+A operação principal deve funcionar localmente, mesmo sem internet.
+
+### Semi online por camadas
+
+Recursos online entram como expansão futura, não como dependência do núcleo.
+
+### Simplicidade operacional
+
+Cada tela deve ter propósito claro, linguagem direta e poucos passos para concluir a ação principal.
+
+### Produto instalável de verdade
+
+O objetivo não é apenas empacotar scripts, mas entregar uma experiência de produto consistente.
+
+---
+
+## Escopo funcional
+
+O Nexor deve ser organizado por domínios funcionais.
+
+### 1. Operação
+
+Fluxo diário da produção.
+
+Inclui:
+
+* leitura automática da pasta de logs
+* listagem de logs encontrados
+* status de processamento
+* seleção dos logs que compõem um rolo
+* revisão do rolo em montagem
+* fechamento do rolo
+* exportações em PDF e JPG mirror
+
+### 2. Cadastros
+
+Entidades de apoio do sistema.
+
+Inclui:
+
+* operadores
+* máquinas / maquinário
+* tecidos
+* aliases de tecido
+* configurações auxiliares
+
+### 3. Consulta e auditoria
+
+Histórico e rastreabilidade.
+
+Inclui:
+
+* busca de rolos registrados
+* filtros por data, máquina, tecido, operador e status
+* abertura dos detalhes do rolo
+* visualização dos logs vinculados
+* reexportação de relatórios
+* revisão de inconsistências e suspeitas
+
+### 4. Planejamento de produção
+
+Organização da fila antes da execução.
+
+Inclui:
 
 * agrupamento por tecido
-* cálculo de metragem por arquivo
-* controle de rolos
-* inserção de gaps entre tecidos
-* estimativa de tempo de produção
-* aproveitamento de tecido disponível em estoque
+* controle de capacidade de rolos
+* definição de gaps
+* estimativa de tempo
+* preparação de fila de impressão
 
-### analytics
+### 5. Estoque
 
-Análise e inteligência operacional da produção.
+Controle simples de materiais.
+
+Inclui:
+
+* cadastro de rolos de tecido
+* cadastro de pedaços
+* disponibilidade por tecido
+* atualização de consumo após confirmação
+
+### 6. Analytics
+
+Métricas e visão de desempenho.
 
 Inclui:
 
 * produtividade por máquina
-* tempo médio por metro
-* métricas de produção
-* identificação de gargalos
-* relatórios de consumo de insumos
+* duração média por metro
+* eficiência operacional
+* histórico e padrões de produção
 
-### agent
+### 7. Configurações e evolução híbrida
 
-Agente local responsável por coletar dados da produção.
+Base para funcionamento local e expansão futura.
 
-Funções previstas:
+Inclui:
 
-* monitorar pastas de logs
-* importar automaticamente novos logs
-* normalizar dados
-* sincronizar com a plataforma
-
----
-
-## Reposições
-
-O Nexor considera que arquivos de reposição seguem uma convenção operacional própria.
-
-Exemplos:
-
-* `N1 - Dryfit`
-* `N1 - Dryfit (1)`
-* `N1 - Dryfit (2)`
-
-Nesse tipo de arquivo, o sistema poderá separar:
-
-* nome original do job
-* tecido
-* tipo de job
-* operador responsável
-* índice da reposição
-
-Exemplo conceitual:
-
-* `job_name = N1 - Dryfit (2)`
-* `fabric = Dryfit`
-* `job_type = replacement`
-* `operator = N`
-* `replacement_index = 1`
-
-O objetivo dessa separação é evitar que variações como `(1)` e `(2)` sejam interpretadas como tecidos diferentes quando, na prática, pertencem à mesma reposição ou ao mesmo grupo de tecido.
-
-Ao mesmo tempo, o Nexor deve manter flexibilidade para que o operador possa ajustar tecido e outros dados antes da exportação final, já que erros de digitação e variações reais de nomenclatura podem acontecer na operação.
-
-Também está previsto o cadastro de operadores para que os relatórios possam exibir o nome completo do responsável, e não apenas sua inicial.
+* pasta de origem dos logs
+* pasta de exportação
+* parâmetros operacionais
+* sincronização futura
+* backup futuro
+* atualizações futuras
 
 ---
 
-## Exportação de Relatórios
+## Entidades centrais
 
-A exportação de PDF e JPG espelhado seguirá o mesmo padrão operacional já adotado no ecossistema Jocasta, adaptado à lógica do Nexor.
+O Nexor deve ser pensado em torno de entidades claras e persistentes.
 
-Cada exportação poderá gerar três arquivos:
+### Entidades principais
 
-### 1. PDF do rolo
+* **Log**
+* **Job**
+* **Rolo**
+* **Máquina**
+* **Operador**
+* **Tecido**
+* **Item de estoque**
+* **Plano de produção**
 
-Arquivo permanente para consulta e histórico.
+### Relação conceitual inicial
 
-Destino:
+* O **log** é a entrada operacional bruta
+* O **job** é o registro normalizado do evento de produção
+* O **rolo** é a consolidação operacional de um conjunto de jobs/logs
+* Máquina, operador e tecido enriquecem a rastreabilidade
+* Estoque e planejamento se conectam ao núcleo após a base operacional estar estável
 
-* pasta de relatórios
-* configurável pelo operador
+### Regra central
 
-### 2. JPG espelhado do rolo
-
-Arquivo permanente de registro visual do rolo exportado.
-
-Destino:
-
-* pasta de registro de rolos
-
-Objetivo:
-
-* permitir reimpressão ou recuperação do resumo de um rolo anterior caso o resumo operacional tenha sido sobrescrito
-
-### 3. JPG espelhado de resumo operacional
-
-Arquivos temporários de uso direto na impressora:
-
-* `Resumo M1.jpg`
-* `Resumo M2.jpg`
-
-Destino:
-
-* pasta de impressão configurável pelo operador
-
-Objetivo:
-
-* deixar sempre disponível na impressora o resumo mais recente da máquina correspondente
-* evitar que o operador precise navegar manualmente entre arquivos para localizar o rolo atual
-
-Esses arquivos de resumo serão sobrescritos a cada nova exportação destinada à respectiva máquina.
+O Nexor deve ser modelado em torno do **ciclo de vida do rolo**, mas sem reduzir o sistema apenas a isso.
 
 ---
 
-## Planejamento de Produção
+## Fluxo principal esperado
 
-O Nexor deverá incluir uma camada de planejamento de produção para organizar impressões antes da execução.
+O fluxo principal da operação deve seguir uma lógica simples e objetiva:
 
-Recursos previstos:
-
-* agrupar jobs por tecido
-* controlar capacidade de rolos
-* inserir espaçamentos entre grupos
-* estimar tempo total de produção
-* avaliar aproveitamento de tecido disponível
-
-### Aproveitamento de tecido
-
-O planejamento poderá contar com uma opção marcável de aproveitamento de tecido.
-
-Nesse modo, o operador poderá cadastrar um estoque simples contendo:
-
-* rolos de tecido
-* pedaços de tecido
-
-Quando a opção estiver habilitada, o sistema poderá:
-
-* verificar se o tecido disponível é compatível com o job planejado
-* distribuir impressões em pedaços de tecido já existentes
-* priorizar o reaproveitamento antes de consumir um novo rolo
-* remover ou atualizar os itens do estoque após confirmação do planejamento
-
-Na fase inicial, o modelo de estoque será simples, priorizando os campos essenciais para operação real.
+1. O sistema lê automaticamente os logs a partir de uma origem configurada
+2. Os logs encontrados são listados com status visíveis
+3. O operador seleciona os logs que fazem parte do rolo atual
+4. O sistema apresenta um resumo consolidado
+5. O rolo é revisado, fechado e registrado
+6. Os relatórios são exportados em PDF e JPG mirror
+7. O rolo pode ser consultado, auditado e reexportado depois
 
 ---
 
-## Relatórios de Consumo
+## Direção de UI/UX
 
-O Nexor também deverá evoluir para gerar relatórios de gastos e consumo operacional.
+A interface do Nexor deve ser planejada para ser intuitiva, rápida e confiável.
 
-Dados previstos:
+### Princípios de UI
 
-* consumo de tinta
-* consumo de papel
-* consumo de tecido
-* indicadores de eficiência de produção
+* uma ação principal por tela
+* nomes claros e operacionais
+* poucos cliques para tarefas frequentes
+* status visíveis
+* erros explicados em linguagem simples
+* confirmações para ações sensíveis
+* padrão visual consistente
 
-As impressoras podem exportar esse tipo de informação em arquivos como:
+### Regra prática
 
-* XML
-* CSV
-
-O formato real desses dados ainda deverá ser validado em ambiente de produção para definir a melhor forma de importação, correlação e análise dentro do Nexor.
-
----
-
-## Documentação
-
-A documentação técnica do projeto está organizada em:
-
-* `docs/architecture.md`
-* `docs/roadmap.md`
+Se o operador abrir o sistema e não souber por onde começar em poucos segundos, a home está errada.
 
 ---
 
-## Princípios do Sistema
+## Estrutura macro de telas
 
-* modularidade
-* rastreabilidade de dados
-* padronização operacional
-* evolução incremental
-* arquitetura preparada para escala
-* foco em operação real de produção
+### Home operacional
+
+Tela inicial com foco no que importa no momento.
+
+Blocos sugeridos:
+
+* logs novos encontrados
+* rolos em aberto
+* último rolo fechado
+* alertas ou suspeitas
+* atalho para novo fechamento de rolo
+* atalho para consultar rolos
+* acesso rápido a planejamento e estoque
+
+### Inbox de logs / montagem do rolo
+
+Tela principal da operação.
+
+### Fechamento do rolo
+
+Tela de confirmação e exportação.
+
+### Consulta de rolos registrados
+
+Tela inspirada conceitualmente no PXSearchOrders, adaptada ao domínio do Nexor.
+
+### Planejamento
+
+Tela separada da operação diária.
+
+### Estoque
+
+Tela separada e objetiva.
+
+### Cadastros e configurações
+
+Área administrativa do sistema.
 
 ---
 
-## Autor
+## Estratégia local-first
 
-**Neuber Jone**
-Developer & Designer
+A operação principal do Nexor deve funcionar localmente.
 
-GitHub: [https://github.com/NeuberJone](https://github.com/NeuberJone)
+### Fase inicial
+
+* banco local
+* leitura de pasta local ou de rede
+* exportações locais
+* funcionamento independente de internet
+
+### Expansão futura
+
+O online deve entrar como camada complementar.
+
+Possibilidades futuras:
+
+* sincronização opcional
+* backup remoto
+* atualização remota
+* centralização de métricas
+* consolidação entre postos ou máquinas
+
+### Regra arquitetural
+
+A operação principal nunca deve depender da internet para funcionar.
+
+---
+
+## Estratégia de produto instalável
+
+O Nexor deve nascer preparado para distribuição como produto instalável.
+
+Isso implica:
+
+* estrutura de diretórios previsível
+* criação automática de banco local
+* configuração inicial guiada
+* validação de pastas
+* mensagens de erro claras
+* logs internos do sistema
+* identidade visual consistente
+* empacotamento estável
+* caminho futuro para atualização
+
+---
+
+## Ordem de implementação recomendada
+
+### Camada 1 — Núcleo operacional
+
+* logs
+* jobs
+* rolos
+* classificação e status
+* persistência
+* métricas básicas
+* fechamento de rolo
+
+### Camada 2 — Cadastros de apoio
+
+* operadores
+* máquinas
+* tecidos
+* aliases
+
+### Camada 3 — Consulta e auditoria
+
+* busca de rolos
+* detalhe do rolo
+* revisão de composição
+* reexportação
+
+### Camada 4 — Planejamento
+
+* fila
+* agrupamento por tecido
+* estimativas
+* rolos previstos
+* gaps
+
+### Camada 5 — Estoque
+
+* rolos
+* pedaços
+* disponibilidade
+* abatimento após confirmação
+
+### Camada 6 — Evolução híbrida
+
+* sincronização opcional
+* backup
+* centralização futura
+
+---
+
+## Roadmap resumido
+
+### Fase 1 — Base operacional confiável
+
+* ingestão e normalização de logs
+* modelo consistente de job
+* métricas corretas
+* regra de suspeita unificada
+* persistência sólida
+
+### Fase 2 — Fechamento de rolos
+
+* inbox de logs
+* seleção dos logs do rolo
+* estados de processamento
+* fechamento estruturado
+* PDF e JPG mirror
+
+### Fase 3 — Cadastros e rastreabilidade ampliada
+
+* operadores
+* máquinas
+* tecidos
+* aliases
+
+### Fase 4 — Consulta e auditoria
+
+* busca de rolos
+* filtros
+* abertura de detalhes
+* reexportação
+* revisão histórica
+
+### Fase 5 — Planejamento de produção
+
+* fila por tecido
+* estimativas
+* capacidade de rolos
+* gaps
+
+### Fase 6 — Estoque
+
+* rolos e pedaços
+* disponibilidade por tecido
+* integração com planejamento
+
+### Fase 7 — Analytics
+
+* produtividade
+* eficiência
+* padrões operacionais
+* apoio à decisão
+
+### Fase 8 — Evolução híbrida
+
+* monitoramento contínuo por agente local
+* sincronização opcional
+* backup e centralização futura
+
+---
+
+## Estado do projeto
+
+O Nexor está em construção, com foco atual na consolidação do núcleo operacional e do modelo de produção.
+
+A prioridade neste momento é fortalecer a base antes de avançar para uma UI completa e para camadas mais altas como planejamento, estoque avançado e sincronização híbrida.
+
+---
+
+## Direção oficial
+
+**O Nexor deve evoluir como uma plataforma operacional de produção têxtil, com base local confiável, fluxo intuitivo de uso diário, rastreabilidade real, camadas de planejamento e estoque, e expansão híbrida planejada com maturidade.**

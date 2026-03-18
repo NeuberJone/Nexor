@@ -81,6 +81,73 @@ BEGIN
     WHERE id = OLD.id;
 END;
 
+CREATE TABLE IF NOT EXISTS rolls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    roll_name TEXT NOT NULL UNIQUE,
+    machine TEXT NOT NULL,
+    fabric TEXT,
+    status TEXT NOT NULL DEFAULT 'OPEN',
+    note TEXT,
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    closed_at TEXT,
+    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_rolls_status
+    ON rolls (status);
+
+CREATE INDEX IF NOT EXISTS idx_rolls_machine
+    ON rolls (machine);
+
+CREATE INDEX IF NOT EXISTS idx_rolls_fabric
+    ON rolls (fabric);
+
+CREATE TRIGGER IF NOT EXISTS trg_rolls_updated_at
+AFTER UPDATE ON rolls
+FOR EACH ROW
+WHEN NEW.updated_at = OLD.updated_at
+BEGIN
+    UPDATE rolls
+    SET updated_at = CURRENT_TIMESTAMP
+    WHERE id = OLD.id;
+END;
+
+CREATE TABLE IF NOT EXISTS roll_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    roll_id INTEGER NOT NULL,
+    job_row_id INTEGER NOT NULL,
+    job_id TEXT NOT NULL,
+    document TEXT NOT NULL,
+    machine TEXT NOT NULL,
+    fabric TEXT,
+    sort_order INTEGER NOT NULL DEFAULT 0,
+
+    planned_length_m REAL NOT NULL DEFAULT 0,
+    effective_printed_length_m REAL NOT NULL DEFAULT 0,
+    consumed_length_m REAL NOT NULL DEFAULT 0,
+    gap_before_m REAL NOT NULL DEFAULT 0,
+
+    metric_category TEXT,
+    review_status TEXT,
+    snapshot_print_status TEXT,
+
+    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    FOREIGN KEY (roll_id) REFERENCES rolls(id) ON DELETE CASCADE,
+    FOREIGN KEY (job_row_id) REFERENCES production_jobs(id) ON DELETE RESTRICT,
+    UNIQUE(roll_id, job_row_id),
+    UNIQUE(job_row_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_roll_items_roll_id
+    ON roll_items (roll_id);
+
+CREATE INDEX IF NOT EXISTS idx_roll_items_job_row_id
+    ON roll_items (job_row_id);
+
+CREATE INDEX IF NOT EXISTS idx_roll_items_sort_order
+    ON roll_items (roll_id, sort_order);
+
 CREATE TABLE IF NOT EXISTS log_sources (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL UNIQUE,

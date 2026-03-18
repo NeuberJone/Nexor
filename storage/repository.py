@@ -4,11 +4,23 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from core.models import ProductionJob, REVIEW_PENDING
+from analytics.production_metrics import classify_job, effective_printed_length_m
+from core.models import (
+    ProductionJob,
+    REVIEW_PENDING,
+    ROLL_CLOSED,
+    ROLL_OPEN,
+    Roll,
+    RollItem,
+)
 
 
 def _now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
+
+
+def _now_display() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _parse_datetime(value: str | None) -> datetime | None:
@@ -66,6 +78,7 @@ class ProductionRepository:
     def connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
     def table_columns(self, conn: sqlite3.Connection) -> set[str]:
@@ -80,13 +93,6 @@ class ProductionRepository:
         return f"trg_{self.table_name}_updated_at"
 
     def ensure_runtime_fields(self, conn: sqlite3.Connection | None = None) -> None:
-        """
-        Garante que o banco atual tenha todos os campos necessários para:
-        - created_at / updated_at
-        - suspicion_*
-        - review_*
-        - trigger de updated_at
-        """
         owns_connection = conn is None
         conn = conn or self.connect()
 
@@ -135,15 +141,13 @@ class ProductionRepository:
                 )
 
             self._ensure_updated_at_trigger(conn)
+            self.ensure_roll_tables(conn)
             conn.commit()
         finally:
             if owns_connection:
                 conn.close()
 
     def ensure_review_fields(self, conn: sqlite3.Connection | None = None) -> None:
-        """
-        Mantido por compatibilidade com chamadas antigas.
-        """
         self.ensure_runtime_fields(conn)
 
     def _ensure_updated_at_trigger(self, conn: sqlite3.Connection) -> None:
@@ -168,6 +172,113 @@ class ProductionRepository:
             END;
             """
         )
+
+    def ensure_roll_tables(self, conn: sqlite3.Connection | None = None) -> None:
+        owns_connection = conn is None
+        conn = conn or self.connect()
+
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS rolls (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    roll_name TEXT NOT NULL UNIQUE,
+                    machine TEXT NOT NULL,
+                    fabric TEXT,
+                    status TEXT NOT NULL DEFAULT 'OPEN',
+                    note TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    closed_at TEXT,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_rolls_status
+                    ON rolls (status)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_rolls_machine
+                    ON rolls (machine)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_rolls_fabric
+                    ON rolls (fabric)
+                """
+            )
+            conn.execute("DROP TRIGGER IF EXISTS trg_rolls_updated_at")
+            conn.execute(
+                """
+                CREATE TRIGGER IF NOT EXISTS trg_rolls_updated_at
+                AFTER UPDATE ON rolls
+                FOR EACH ROW
+                WHEN NEW.updated_at = OLD.updated_at
+                BEGIN
+                    UPDATE rolls
+                    SET updated_at = CURRENT_TIMESTAMP
+                    WHERE id = OLD.id;
+                END;
+                """
+            )
+
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS roll_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    roll_id INTEGER NOT NULL,
+                    job_row_id INTEGER NOT NULL,
+                    job_id TEXT NOT NULL,
+                    document TEXT NOT NULL,
+                    machine TEXT NOT NULL,
+                    fabric TEXT,
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+
+                    planned_length_m REAL NOT NULL DEFAULT 0,
+                    effective_printed_length_m REAL NOT NULL DEFAULT 0,
+                    consumed_length_m REAL NOT NULL DEFAULT 0,
+                    gap_before_m REAL NOT NULL DEFAULT 0,
+
+                    metric_category TEXT,
+                    review_status TEXT,
+                    snapshot_print_status TEXT,
+
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+                    FOREIGN KEY (roll_id) REFERENCES rolls(id) ON DELETE CASCADE,
+                    FOREIGN KEY (job_row_id) REFERENCES production_jobs(id) ON DELETE RESTRICT,
+                    UNIQUE(roll_id, job_row_id),
+                    UNIQUE(job_row_id)
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_roll_items_roll_id
+                    ON roll_items (roll_id)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_roll_items_job_row_id
+                    ON roll_items (job_row_id)
+                """
+            )
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_roll_items_sort_order
+                    ON roll_items (roll_id, sort_order)
+                """
+            )
+
+            conn.commit()
+        finally:
+            if owns_connection:
+                conn.close()
 
     def row_to_job(self, row: sqlite3.Row) -> ProductionJob:
         actual_printed = None
@@ -237,6 +348,81 @@ class ProductionRepository:
             updated_at=_parse_datetime(row["updated_at"]) if "updated_at" in row.keys() else None,
         )
 
+    def row_to_roll(self, row: sqlite3.Row) -> Roll:
+        return Roll(
+            id=int(row["id"]),
+            roll_name=row["roll_name"],
+            machine=row["machine"],
+            fabric=row["fabric"],
+            status=row["status"],
+            note=row["note"],
+            created_at=_parse_datetime(row["created_at"]),
+            closed_at=_parse_datetime(row["closed_at"]),
+            updated_at=_parse_datetime(row["updated_at"]),
+        )
+
+    def row_to_roll_item(self, row: sqlite3.Row) -> RollItem:
+        return RollItem(
+            id=int(row["id"]),
+            roll_id=int(row["roll_id"]),
+            job_row_id=int(row["job_row_id"]),
+            job_id=row["job_id"],
+            document=row["document"],
+            machine=row["machine"],
+            fabric=row["fabric"],
+            sort_order=int(row["sort_order"]),
+            planned_length_m=float(row["planned_length_m"] or 0.0),
+            effective_printed_length_m=float(row["effective_printed_length_m"] or 0.0),
+            consumed_length_m=float(row["consumed_length_m"] or 0.0),
+            gap_before_m=float(row["gap_before_m"] or 0.0),
+            metric_category=row["metric_category"],
+            review_status=row["review_status"],
+            snapshot_print_status=row["snapshot_print_status"],
+            created_at=_parse_datetime(row["created_at"]),
+        )
+
+    def generate_roll_name(
+        self,
+        machine: str,
+        opened_at: datetime | None = None,
+        conn: sqlite3.Connection | None = None,
+    ) -> str:
+        owns_connection = conn is None
+        conn = conn or self.connect()
+
+        try:
+            self.ensure_runtime_fields(conn)
+            self.ensure_roll_tables(conn)
+
+            dt = opened_at or datetime.now()
+            machine_code = machine.strip().upper()
+            date_key = dt.strftime("%Y%m%d")
+            prefix = f"{machine_code}_{date_key}_"
+
+            rows = conn.execute(
+                """
+                SELECT roll_name
+                FROM rolls
+                WHERE machine = ?
+                  AND roll_name LIKE ?
+                ORDER BY roll_name
+                """,
+                (machine_code, f"{prefix}%"),
+            ).fetchall()
+
+            max_seq = 0
+            for row in rows:
+                name = str(row["roll_name"])
+                suffix = name.rsplit("_", 1)[-1]
+                if suffix.isdigit():
+                    max_seq = max(max_seq, int(suffix))
+
+            next_seq = max_seq + 1
+            return f"{machine_code}_{date_key}_{next_seq:03d}"
+        finally:
+            if owns_connection:
+                conn.close()
+
     def list_jobs(self, limit: int | None = None) -> list[ProductionJob]:
         with self.connect() as conn:
             self.ensure_runtime_fields(conn)
@@ -250,6 +436,33 @@ class ProductionRepository:
 
             rows = conn.execute(sql, params).fetchall()
             return [self.row_to_job(row) for row in rows]
+
+    def get_job_by_row_id(self, row_id: int) -> ProductionJob | None:
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            row = conn.execute(
+                f"SELECT * FROM {self.table_name} WHERE id = ?",
+                (row_id,),
+            ).fetchone()
+            return self.row_to_job(row) if row else None
+
+    def get_job_by_job_id(self, job_id: str) -> ProductionJob | None:
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            rows = conn.execute(
+                f"SELECT * FROM {self.table_name} WHERE job_id = ? ORDER BY start_time, id",
+                (job_id,),
+            ).fetchall()
+
+            if not rows:
+                return None
+
+            if len(rows) > 1:
+                raise ValueError(
+                    f"Mais de um registro encontrado para job_id={job_id}. Use o ID interno."
+                )
+
+            return self.row_to_job(rows[0])
 
     def save_job(self, job: ProductionJob) -> int:
         with self.connect() as conn:
@@ -461,10 +674,6 @@ class ProductionRepository:
         row_id: int,
         error_reason: str | None = None,
     ) -> None:
-        """
-        Sincroniza a revisão REVIEWED_FAILED com o status operacional do job.
-        Só deve ser usado quando a falha tiver sido confirmada manualmente.
-        """
         with self.connect() as conn:
             self.ensure_runtime_fields(conn)
             columns = self.table_columns(conn)
@@ -532,3 +741,385 @@ class ProductionRepository:
             ).fetchall()
 
             return [self.row_to_job(row) for row in rows]
+
+    # ------------------------
+    # Rolls
+    # ------------------------
+
+    def create_roll(
+        self,
+        machine: str,
+        fabric: str | None = None,
+        note: str | None = None,
+        roll_name: str | None = None,
+    ) -> int:
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            self.ensure_roll_tables(conn)
+
+            machine_code = machine.strip().upper()
+            final_roll_name = (roll_name.strip().upper() if roll_name else None) or self.generate_roll_name(
+                machine=machine_code,
+                conn=conn,
+            )
+
+            try:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO rolls (roll_name, machine, fabric, status, note, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                    """,
+                    (final_roll_name, machine_code, fabric, ROLL_OPEN, note),
+                )
+                conn.commit()
+                return int(cursor.lastrowid)
+            except sqlite3.IntegrityError as exc:
+                message = str(exc).lower()
+                if "rolls.roll_name" in message or "unique constraint failed: rolls.roll_name" in message:
+                    raise ValueError(
+                        f"Já existe um rolo com o nome '{final_roll_name}'. "
+                        "Use outro nome ou deixe o Nexor gerar automaticamente."
+                    ) from exc
+                raise
+
+    def append_roll_note(
+        self,
+        roll_id: int,
+        note: str,
+        operator: str | None = None,
+    ) -> None:
+        if not note or not note.strip():
+            raise ValueError("A observação não pode estar vazia.")
+
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            self.ensure_roll_tables(conn)
+
+            row = conn.execute(
+                "SELECT note FROM rolls WHERE id = ?",
+                (roll_id,),
+            ).fetchone()
+
+            if not row:
+                raise ValueError(f"Rolo não encontrado: id={roll_id}")
+
+            current_note = row["note"] or ""
+            timestamp = _now_display()
+            operator_label = f"[{operator.strip()}] " if operator and operator.strip() else ""
+            new_entry = f"[{timestamp}] {operator_label}{note.strip()}"
+
+            final_note = f"{current_note}\n{new_entry}".strip() if current_note.strip() else new_entry
+
+            conn.execute(
+                """
+                UPDATE rolls
+                SET note = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (final_note, roll_id),
+            )
+            conn.commit()
+
+    def list_rolls(self, status: str | None = None) -> list[Roll]:
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            self.ensure_roll_tables(conn)
+
+            sql = "SELECT * FROM rolls"
+            params: tuple[object, ...] = ()
+
+            if status and status.upper() != "ALL":
+                sql += " WHERE status = ?"
+                params = (status.upper(),)
+
+            sql += " ORDER BY created_at DESC, id DESC"
+
+            rows = conn.execute(sql, params).fetchall()
+            return [self.row_to_roll(row) for row in rows]
+
+    def get_roll(self, roll_id: int | None = None, roll_name: str | None = None) -> Roll | None:
+        if roll_id is None and roll_name is None:
+            raise ValueError("Informe roll_id ou roll_name.")
+
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            self.ensure_roll_tables(conn)
+
+            if roll_id is not None:
+                row = conn.execute(
+                    "SELECT * FROM rolls WHERE id = ?",
+                    (roll_id,),
+                ).fetchone()
+                return self.row_to_roll(row) if row else None
+
+            row = conn.execute(
+                "SELECT * FROM rolls WHERE roll_name = ?",
+                (roll_name,),
+            ).fetchone()
+            return self.row_to_roll(row) if row else None
+
+    def _get_job_for_roll(
+        self,
+        conn: sqlite3.Connection,
+        job_row_id: int | None = None,
+        job_id: str | None = None,
+    ) -> ProductionJob:
+        if job_row_id is None and job_id is None:
+            raise ValueError("Informe job_row_id ou job_id.")
+
+        if job_row_id is not None:
+            row = conn.execute(
+                f"SELECT * FROM {self.table_name} WHERE id = ?",
+                (job_row_id,),
+            ).fetchone()
+            if not row:
+                raise ValueError(f"Job não encontrado para id={job_row_id}.")
+            return self.row_to_job(row)
+
+        rows = conn.execute(
+            f"SELECT * FROM {self.table_name} WHERE job_id = ? ORDER BY start_time, id",
+            (job_id,),
+        ).fetchall()
+
+        if not rows:
+            raise ValueError(f"Job não encontrado para job_id={job_id}.")
+        if len(rows) > 1:
+            raise ValueError(
+                f"Mais de um registro encontrado para job_id={job_id}. Use o ID interno."
+            )
+
+        return self.row_to_job(rows[0])
+
+    def list_roll_items(self, roll_id: int) -> list[RollItem]:
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            self.ensure_roll_tables(conn)
+
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM roll_items
+                WHERE roll_id = ?
+                ORDER BY sort_order, id
+                """,
+                (roll_id,),
+            ).fetchall()
+
+            return [self.row_to_roll_item(row) for row in rows]
+
+    def add_job_to_roll(
+        self,
+        roll_id: int,
+        job_row_id: int | None = None,
+        job_id: str | None = None,
+    ) -> int:
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            self.ensure_roll_tables(conn)
+
+            roll_row = conn.execute(
+                "SELECT * FROM rolls WHERE id = ?",
+                (roll_id,),
+            ).fetchone()
+            if not roll_row:
+                raise ValueError(f"Rolo não encontrado: id={roll_id}")
+
+            roll = self.row_to_roll(roll_row)
+            if roll.status != ROLL_OPEN:
+                raise ValueError(f"O rolo {roll.roll_name} já está fechado.")
+
+            job = self._get_job_for_roll(conn, job_row_id=job_row_id, job_id=job_id)
+            if job.id is None:
+                raise ValueError("Job sem ID persistido.")
+
+            existing_any = conn.execute(
+                """
+                SELECT ri.id, ri.roll_id, r.roll_name
+                FROM roll_items ri
+                JOIN rolls r ON r.id = ri.roll_id
+                WHERE ri.job_row_id = ?
+                """,
+                (int(job.id),),
+            ).fetchone()
+
+            if existing_any:
+                raise ValueError(
+                    f"Este job já pertence ao rolo {existing_any['roll_name']} (id={existing_any['roll_id']})."
+                )
+
+            if roll.machine.strip().upper() != (job.machine or "").strip().upper():
+                raise ValueError(
+                    f"Máquina incompatível. Rolo={roll.machine} | Job={job.machine}"
+                )
+
+            if roll.fabric and job.fabric:
+                if roll.fabric.strip().upper() != job.fabric.strip().upper():
+                    raise ValueError(
+                        f"Tecido incompatível. Rolo={roll.fabric} | Job={job.fabric}"
+                    )
+
+            next_sort = conn.execute(
+                "SELECT COALESCE(MAX(sort_order), 0) + 1 AS next_sort FROM roll_items WHERE roll_id = ?",
+                (roll_id,),
+            ).fetchone()["next_sort"]
+
+            decision = classify_job(job)
+            cursor = conn.execute(
+                """
+                INSERT INTO roll_items (
+                    roll_id,
+                    job_row_id,
+                    job_id,
+                    document,
+                    machine,
+                    fabric,
+                    sort_order,
+                    planned_length_m,
+                    effective_printed_length_m,
+                    consumed_length_m,
+                    gap_before_m,
+                    metric_category,
+                    review_status,
+                    snapshot_print_status,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (
+                    roll_id,
+                    int(job.id),
+                    job.job_id,
+                    job.document,
+                    job.machine,
+                    job.fabric,
+                    int(next_sort),
+                    float(job.planned_length_m),
+                    float(effective_printed_length_m(job)),
+                    float(job.consumed_length_m),
+                    float(job.gap_before_m),
+                    decision.category or "OK",
+                    job.review_status,
+                    job.print_status,
+                ),
+            )
+            conn.commit()
+            return int(cursor.lastrowid)
+
+    def remove_job_from_roll(
+        self,
+        roll_id: int,
+        job_row_id: int | None = None,
+        job_id: str | None = None,
+    ) -> int:
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            self.ensure_roll_tables(conn)
+
+            roll_row = conn.execute(
+                "SELECT * FROM rolls WHERE id = ?",
+                (roll_id,),
+            ).fetchone()
+            if not roll_row:
+                raise ValueError(f"Rolo não encontrado: id={roll_id}")
+
+            roll = self.row_to_roll(roll_row)
+            if roll.status != ROLL_OPEN:
+                raise ValueError(f"O rolo {roll.roll_name} já está fechado.")
+
+            if job_row_id is None and job_id is None:
+                raise ValueError("Informe job_row_id ou job_id.")
+
+            if job_row_id is not None:
+                cursor = conn.execute(
+                    """
+                    DELETE FROM roll_items
+                    WHERE roll_id = ? AND job_row_id = ?
+                    """,
+                    (roll_id, job_row_id),
+                )
+            else:
+                cursor = conn.execute(
+                    """
+                    DELETE FROM roll_items
+                    WHERE roll_id = ? AND job_id = ?
+                    """,
+                    (roll_id, job_id),
+                )
+
+            conn.commit()
+            return int(cursor.rowcount)
+
+    def close_roll(self, roll_id: int, note: str | None = None) -> None:
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            self.ensure_roll_tables(conn)
+
+            roll_row = conn.execute(
+                "SELECT * FROM rolls WHERE id = ?",
+                (roll_id,),
+            ).fetchone()
+            if not roll_row:
+                raise ValueError(f"Rolo não encontrado: id={roll_id}")
+
+            existing_items = conn.execute(
+                "SELECT COUNT(*) AS n FROM roll_items WHERE roll_id = ?",
+                (roll_id,),
+            ).fetchone()["n"]
+            if int(existing_items) <= 0:
+                raise ValueError("Não é possível fechar um rolo vazio.")
+
+            current_note = roll_row["note"]
+            final_note = current_note
+            if note:
+                final_note = f"{current_note}\n{note}".strip() if current_note else note
+
+            conn.execute(
+                """
+                UPDATE rolls
+                SET status = ?,
+                    note = ?,
+                    closed_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (ROLL_CLOSED, final_note, roll_id),
+            )
+            conn.commit()
+
+    def get_roll_summary(self, roll_id: int) -> dict:
+        roll = self.get_roll(roll_id=roll_id)
+        if not roll:
+            raise ValueError(f"Rolo não encontrado: id={roll_id}")
+
+        items = self.list_roll_items(roll_id)
+
+        total_planned = sum(item.planned_length_m for item in items)
+        total_effective = sum(item.effective_printed_length_m for item in items)
+        total_consumed = sum(item.consumed_length_m for item in items)
+        total_gap = sum(item.gap_before_m for item in items)
+
+        metric_counts: dict[str, int] = {}
+        fabric_counts: dict[str, float] = {}
+
+        for item in items:
+            key = item.metric_category or "OK"
+            metric_counts[key] = metric_counts.get(key, 0) + 1
+
+            fab = (item.fabric or "SEM TECIDO").strip() or "SEM TECIDO"
+            fabric_counts[fab] = fabric_counts.get(fab, 0.0) + float(item.effective_printed_length_m)
+
+        efficiency = (total_effective / total_planned) if total_planned > 0 else None
+
+        return {
+            "roll": roll,
+            "items": items,
+            "jobs_count": len(items),
+            "total_planned_m": total_planned,
+            "total_effective_m": total_effective,
+            "total_consumed_m": total_consumed,
+            "total_gap_m": total_gap,
+            "efficiency_ratio": efficiency,
+            "metric_counts": metric_counts,
+            "fabric_totals": fabric_counts,
+        }

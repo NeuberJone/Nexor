@@ -3,13 +3,25 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime
 from pathlib import Path
+import re
 
 from analytics.production_metrics import classify_job, effective_printed_length_m
 from core.models import (
+    Job,
+    Log,
     ProductionJob,
     REVIEW_PENDING,
     ROLL_CLOSED,
+    ROLL_EXPORTED,
     ROLL_OPEN,
+    ROLL_REOPENED,
+    ROLL_REVIEWED,
+    LOG_CONVERTED,
+    LOG_DUPLICATED,
+    LOG_IGNORED,
+    LOG_INVALID,
+    LOG_NEW,
+    LOG_PARSED,
     Roll,
     RollItem,
 )
@@ -30,6 +42,12 @@ def _parse_datetime(value: str | None) -> datetime | None:
         return datetime.fromisoformat(value)
     except ValueError:
         return None
+
+
+def _dt_to_iso(value: datetime | None) -> str | None:
+    if value is None:
+        return None
+    return value.isoformat(timespec="seconds")
 
 
 def _to_bool(value: object, default: bool = False) -> bool:
@@ -66,6 +84,12 @@ def _default_db_path() -> Path:
     return root / "nexor.db"
 
 
+def _validate_identifier(name: str) -> str:
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
+        raise ValueError(f"Invalid SQL identifier: {name!r}")
+    return name
+
+
 class ProductionRepository:
     def __init__(
         self,
@@ -73,54 +97,290 @@ class ProductionRepository:
         table_name: str = "production_jobs",
     ) -> None:
         self.db_path = Path(db_path) if db_path is not None else _default_db_path()
-        self.table_name = table_name
+        self.table_name = _validate_identifier(table_name)
 
     def connect(self) -> sqlite3.Connection:
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(self.db_path))
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
-    def table_columns(self, conn: sqlite3.Connection) -> set[str]:
-        cursor = conn.execute(f"PRAGMA table_info({self.table_name})")
+    def table_columns(self, conn: sqlite3.Connection, table_name: str | None = None) -> set[str]:
+        target = _validate_identifier(table_name or self.table_name)
+        cursor = conn.execute(f"PRAGMA table_info({target})")
         return {str(row["name"]) for row in cursor.fetchall()}
 
-    def _pk_column(self, conn: sqlite3.Connection) -> str:
-        columns = self.table_columns(conn)
+    def _pk_column(self, conn: sqlite3.Connection, table_name: str | None = None) -> str:
+        columns = self.table_columns(conn, table_name)
         return "id" if "id" in columns else "rowid"
 
-    def _updated_at_trigger_name(self) -> str:
-        return f"trg_{self.table_name}_updated_at"
+    def _updated_at_trigger_name(self, table_name: str | None = None) -> str:
+        target = _validate_identifier(table_name or self.table_name)
+        return f"trg_{target}_updated_at"
+
+    def _ensure_updated_at_trigger(self, conn: sqlite3.Connection, table_name: str | None = None) -> None:
+        target = _validate_identifier(table_name or self.table_name)
+        columns = self.table_columns(conn, target)
+        trigger_name = self._updated_at_trigger_name(target)
+
+        conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
+
+        if "updated_at" not in columns:
+            return
+
+        conn.execute(
+            f"""
+            CREATE TRIGGER IF NOT EXISTS {trigger_name}
+            AFTER UPDATE ON {target}
+            FOR EACH ROW
+            WHEN NEW.updated_at = OLD.updated_at
+            BEGIN
+                UPDATE {target}
+                SET updated_at = CURRENT_TIMESTAMP
+                WHERE rowid = OLD.rowid;
+            END;
+            """
+        )
+
+    def _ensure_table_columns(
+        self,
+        conn: sqlite3.Connection,
+        table_name: str,
+        desired_columns: dict[str, str],
+    ) -> None:
+        target = _validate_identifier(table_name)
+        existing = self.table_columns(conn, target)
+
+        for column_name, column_type in desired_columns.items():
+            if column_name in existing:
+                continue
+            conn.execute(f"ALTER TABLE {target} ADD COLUMN {column_name} {column_type}")
+
+    # ------------------------------------------------------------------
+    # Schema / runtime compatibility
+    # ------------------------------------------------------------------
+
+    def ensure_log_table(self, conn: sqlite3.Connection | None = None) -> None:
+        owns_connection = conn is None
+        conn = conn or self.connect()
+
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    source_path TEXT,
+                    source_name TEXT,
+                    fingerprint TEXT UNIQUE,
+                    machine_code_raw TEXT,
+                    captured_at TEXT,
+                    raw_payload TEXT,
+                    status TEXT NOT NULL DEFAULT 'NEW',
+                    parse_error TEXT,
+                    imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    job_id INTEGER,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+
+            self._ensure_table_columns(
+                conn,
+                "logs",
+                {
+                    "source_path": "TEXT",
+                    "source_name": "TEXT",
+                    "fingerprint": "TEXT",
+                    "machine_code_raw": "TEXT",
+                    "captured_at": "TEXT",
+                    "raw_payload": "TEXT",
+                    "status": "TEXT",
+                    "parse_error": "TEXT",
+                    "imported_at": "TEXT",
+                    "job_id": "INTEGER",
+                    "created_at": "TEXT",
+                    "updated_at": "TEXT",
+                },
+            )
+
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_logs_fingerprint ON logs (fingerprint)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_logs_status ON logs (status)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_logs_captured_at ON logs (captured_at)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_logs_source_path ON logs (source_path)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_logs_machine_code_raw ON logs (machine_code_raw)"
+            )
+
+            conn.execute(
+                """
+                UPDATE logs
+                SET created_at = COALESCE(created_at, CURRENT_TIMESTAMP)
+                WHERE created_at IS NULL
+                """
+            )
+            conn.execute(
+                """
+                UPDATE logs
+                SET updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP)
+                WHERE updated_at IS NULL
+                """
+            )
+
+            self._ensure_updated_at_trigger(conn, "logs")
+            conn.commit()
+        finally:
+            if owns_connection:
+                conn.close()
+
+    def ensure_roll_tables(self, conn: sqlite3.Connection | None = None) -> None:
+        owns_connection = conn is None
+        conn = conn or self.connect()
+
+        try:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS rolls (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    roll_name TEXT NOT NULL UNIQUE,
+                    machine TEXT NOT NULL,
+                    fabric TEXT,
+                    status TEXT NOT NULL DEFAULT 'OPEN',
+                    note TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    closed_at TEXT,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    exported_at TEXT,
+                    reviewed_at TEXT,
+                    reopened_at TEXT
+                )
+                """
+            )
+
+            self._ensure_table_columns(
+                conn,
+                "rolls",
+                {
+                    "roll_name": "TEXT",
+                    "machine": "TEXT",
+                    "fabric": "TEXT",
+                    "status": "TEXT",
+                    "note": "TEXT",
+                    "created_at": "TEXT",
+                    "closed_at": "TEXT",
+                    "updated_at": "TEXT",
+                    "exported_at": "TEXT",
+                    "reviewed_at": "TEXT",
+                    "reopened_at": "TEXT",
+                },
+            )
+
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_rolls_status ON rolls (status)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_rolls_machine ON rolls (machine)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_rolls_fabric ON rolls (fabric)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_rolls_created_at ON rolls (created_at)"
+            )
+
+            self._ensure_updated_at_trigger(conn, "rolls")
+
+            conn.execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS roll_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    roll_id INTEGER NOT NULL,
+                    job_row_id INTEGER NOT NULL,
+                    job_id TEXT NOT NULL,
+                    document TEXT NOT NULL,
+                    machine TEXT NOT NULL,
+                    fabric TEXT,
+                    sort_order INTEGER NOT NULL DEFAULT 0,
+                    planned_length_m REAL NOT NULL DEFAULT 0,
+                    effective_printed_length_m REAL NOT NULL DEFAULT 0,
+                    consumed_length_m REAL NOT NULL DEFAULT 0,
+                    gap_before_m REAL NOT NULL DEFAULT 0,
+                    metric_category TEXT,
+                    review_status TEXT,
+                    snapshot_print_status TEXT,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (roll_id) REFERENCES rolls(id) ON DELETE CASCADE,
+                    FOREIGN KEY (job_row_id) REFERENCES {self.table_name}(id) ON DELETE RESTRICT,
+                    UNIQUE(roll_id, job_row_id),
+                    UNIQUE(job_row_id)
+                )
+                """
+            )
+
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_roll_items_roll_id ON roll_items (roll_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_roll_items_job_row_id ON roll_items (job_row_id)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_roll_items_sort_order ON roll_items (roll_id, sort_order)"
+            )
+            conn.commit()
+        finally:
+            if owns_connection:
+                conn.close()
 
     def ensure_runtime_fields(self, conn: sqlite3.Connection | None = None) -> None:
         owns_connection = conn is None
         conn = conn or self.connect()
 
         try:
-            existing = self.table_columns(conn)
+            # Core jobs table compatibility / migrations
+            self._ensure_table_columns(
+                conn,
+                self.table_name,
+                {
+                    "log_id": "INTEGER",
+                    "created_at": "TEXT",
+                    "updated_at": "TEXT",
+                    "actual_printed_length_m": "REAL",
+                    "gap_before_m": "REAL",
+                    "consumed_length_m": "REAL",
+                    "job_type": "TEXT",
+                    "is_rework": "INTEGER",
+                    "notes": "TEXT",
+                    "print_status": "TEXT",
+                    "counts_as_valid_production": "INTEGER",
+                    "counts_for_fabric_summary": "INTEGER",
+                    "counts_for_roll_export": "INTEGER",
+                    "error_reason": "TEXT",
+                    "operator_code": "TEXT",
+                    "operator_name": "TEXT",
+                    "replacement_index": "INTEGER",
+                    "suspicion_category": "TEXT",
+                    "suspicion_reason": "TEXT",
+                    "suspicion_ratio": "REAL",
+                    "suspicion_missing_length_m": "REAL",
+                    "suspicion_marked_at": "TEXT",
+                    "review_status": "TEXT",
+                    "review_note": "TEXT",
+                    "reviewed_by": "TEXT",
+                    "reviewed_at": "TEXT",
+                    "classification": "TEXT",
+                },
+            )
 
-            desired_columns = {
-                "created_at": "TEXT",
-                "updated_at": "TEXT",
-                "suspicion_category": "TEXT",
-                "suspicion_reason": "TEXT",
-                "suspicion_ratio": "REAL",
-                "suspicion_missing_length_m": "REAL",
-                "suspicion_marked_at": "TEXT",
-                "review_status": "TEXT",
-                "review_note": "TEXT",
-                "reviewed_by": "TEXT",
-                "reviewed_at": "TEXT",
-            }
-
-            for column_name, column_type in desired_columns.items():
-                if column_name in existing:
-                    continue
-                conn.execute(
-                    f"ALTER TABLE {self.table_name} ADD COLUMN {column_name} {column_type}"
-                )
-
-            existing = self.table_columns(conn)
+            existing = self.table_columns(conn, self.table_name)
 
             if "created_at" in existing:
                 conn.execute(
@@ -140,7 +400,27 @@ class ProductionRepository:
                     """
                 )
 
-            self._ensure_updated_at_trigger(conn)
+            if "review_status" in existing:
+                conn.execute(
+                    f"""
+                    UPDATE {self.table_name}
+                    SET review_status = COALESCE(review_status, ?)
+                    WHERE review_status IS NULL
+                    """,
+                    (REVIEW_PENDING,),
+                )
+
+            if "print_status" in existing:
+                conn.execute(
+                    f"""
+                    UPDATE {self.table_name}
+                    SET print_status = COALESCE(print_status, 'OK')
+                    WHERE print_status IS NULL
+                    """
+                )
+
+            self._ensure_updated_at_trigger(conn, self.table_name)
+            self.ensure_log_table(conn)
             self.ensure_roll_tables(conn)
             conn.commit()
         finally:
@@ -150,135 +430,166 @@ class ProductionRepository:
     def ensure_review_fields(self, conn: sqlite3.Connection | None = None) -> None:
         self.ensure_runtime_fields(conn)
 
-    def _ensure_updated_at_trigger(self, conn: sqlite3.Connection) -> None:
-        columns = self.table_columns(conn)
-        trigger_name = self._updated_at_trigger_name()
+    # ------------------------------------------------------------------
+    # Logs
+    # ------------------------------------------------------------------
 
-        conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
-
-        if "updated_at" not in columns:
-            return
-
-        conn.execute(
-            f"""
-            CREATE TRIGGER IF NOT EXISTS {trigger_name}
-            AFTER UPDATE ON {self.table_name}
-            FOR EACH ROW
-            WHEN NEW.updated_at = OLD.updated_at
-            BEGIN
-                UPDATE {self.table_name}
-                SET updated_at = CURRENT_TIMESTAMP
-                WHERE rowid = OLD.rowid;
-            END;
-            """
+    def row_to_log(self, row: sqlite3.Row) -> Log:
+        return Log(
+            id=int(row["id"]) if row["id"] is not None else None,
+            source_path=row["source_path"] if "source_path" in row.keys() else None,
+            source_name=row["source_name"] if "source_name" in row.keys() else None,
+            fingerprint=row["fingerprint"] if "fingerprint" in row.keys() else None,
+            machine_code_raw=row["machine_code_raw"] if "machine_code_raw" in row.keys() else None,
+            captured_at=_parse_datetime(row["captured_at"]) if "captured_at" in row.keys() else None,
+            raw_payload=row["raw_payload"] if "raw_payload" in row.keys() else None,
+            status=row["status"] if "status" in row.keys() and row["status"] else LOG_NEW,
+            parse_error=row["parse_error"] if "parse_error" in row.keys() else None,
+            imported_at=_parse_datetime(row["imported_at"]) if "imported_at" in row.keys() else None,
+            job_id=int(row["job_id"]) if "job_id" in row.keys() and row["job_id"] is not None else None,
         )
 
-    def ensure_roll_tables(self, conn: sqlite3.Connection | None = None) -> None:
-        owns_connection = conn is None
-        conn = conn or self.connect()
+    def list_logs(self, status: str | None = None, limit: int | None = None) -> list[Log]:
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            sql = "SELECT * FROM logs"
+            params: list[object] = []
 
-        try:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS rolls (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    roll_name TEXT NOT NULL UNIQUE,
-                    machine TEXT NOT NULL,
-                    fabric TEXT,
-                    status TEXT NOT NULL DEFAULT 'OPEN',
-                    note TEXT,
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    closed_at TEXT,
-                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_rolls_status
-                    ON rolls (status)
-                """
-            )
-            conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_rolls_machine
-                    ON rolls (machine)
-                """
-            )
-            conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_rolls_fabric
-                    ON rolls (fabric)
-                """
-            )
-            conn.execute("DROP TRIGGER IF EXISTS trg_rolls_updated_at")
-            conn.execute(
-                """
-                CREATE TRIGGER IF NOT EXISTS trg_rolls_updated_at
-                AFTER UPDATE ON rolls
-                FOR EACH ROW
-                WHEN NEW.updated_at = OLD.updated_at
-                BEGIN
-                    UPDATE rolls
-                    SET updated_at = CURRENT_TIMESTAMP
-                    WHERE id = OLD.id;
-                END;
-                """
+            if status:
+                sql += " WHERE status = ?"
+                params.append(status)
+
+            sql += " ORDER BY imported_at DESC, id DESC"
+
+            if limit is not None:
+                sql += " LIMIT ?"
+                params.append(limit)
+
+            rows = conn.execute(sql, tuple(params)).fetchall()
+            return [self.row_to_log(row) for row in rows]
+
+    def get_log_by_id(self, log_id: int) -> Log | None:
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            row = conn.execute("SELECT * FROM logs WHERE id = ?", (log_id,)).fetchone()
+            return self.row_to_log(row) if row else None
+
+    def get_log_by_fingerprint(self, fingerprint: str) -> Log | None:
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            row = conn.execute(
+                "SELECT * FROM logs WHERE fingerprint = ?",
+                (fingerprint,),
+            ).fetchone()
+            return self.row_to_log(row) if row else None
+
+    def _get_log_row_id_by_fingerprint(self, conn: sqlite3.Connection, fingerprint: str) -> int | None:
+        row = conn.execute(
+            "SELECT id FROM logs WHERE fingerprint = ?",
+            (fingerprint,),
+        ).fetchone()
+        return int(row["id"]) if row else None
+
+    def save_log(self, log: Log) -> int:
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+
+            payload = {
+                "source_path": log.source_path,
+                "source_name": log.source_name,
+                "fingerprint": log.fingerprint,
+                "machine_code_raw": log.machine_code_raw,
+                "captured_at": _dt_to_iso(log.captured_at),
+                "raw_payload": log.raw_payload,
+                "status": log.status or LOG_NEW,
+                "parse_error": log.parse_error,
+                "imported_at": _dt_to_iso(log.imported_at) or _now_iso(),
+                "job_id": log.job_id,
+                "updated_at": _now_iso(),
+            }
+
+            if log.id is None:
+                payload["created_at"] = _now_iso()
+
+            columns = [name for name in payload.keys()]
+            placeholders = ", ".join("?" for _ in columns)
+            update_sql = ", ".join(
+                f"{name}=excluded.{name}" for name in columns if name != "created_at"
             )
 
             conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS roll_items (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    roll_id INTEGER NOT NULL,
-                    job_row_id INTEGER NOT NULL,
-                    job_id TEXT NOT NULL,
-                    document TEXT NOT NULL,
-                    machine TEXT NOT NULL,
-                    fabric TEXT,
-                    sort_order INTEGER NOT NULL DEFAULT 0,
-
-                    planned_length_m REAL NOT NULL DEFAULT 0,
-                    effective_printed_length_m REAL NOT NULL DEFAULT 0,
-                    consumed_length_m REAL NOT NULL DEFAULT 0,
-                    gap_before_m REAL NOT NULL DEFAULT 0,
-
-                    metric_category TEXT,
-                    review_status TEXT,
-                    snapshot_print_status TEXT,
-
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-
-                    FOREIGN KEY (roll_id) REFERENCES rolls(id) ON DELETE CASCADE,
-                    FOREIGN KEY (job_row_id) REFERENCES production_jobs(id) ON DELETE RESTRICT,
-                    UNIQUE(roll_id, job_row_id),
-                    UNIQUE(job_row_id)
-                )
-                """
-            )
-            conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_roll_items_roll_id
-                    ON roll_items (roll_id)
-                """
-            )
-            conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_roll_items_job_row_id
-                    ON roll_items (job_row_id)
-                """
-            )
-            conn.execute(
-                """
-                CREATE INDEX IF NOT EXISTS idx_roll_items_sort_order
-                    ON roll_items (roll_id, sort_order)
-                """
+                f"""
+                INSERT INTO logs ({", ".join(columns)})
+                VALUES ({placeholders})
+                ON CONFLICT(fingerprint)
+                DO UPDATE SET {update_sql}
+                """,
+                [payload[name] for name in columns],
             )
 
             conn.commit()
-        finally:
-            if owns_connection:
-                conn.close()
+
+            if log.fingerprint:
+                row_id = self._get_log_row_id_by_fingerprint(conn, log.fingerprint)
+                if row_id is not None:
+                    return row_id
+
+            row = conn.execute("SELECT last_insert_rowid() AS row_id").fetchone()
+            return int(row["row_id"] or 0)
+
+    def _update_log_status(
+        self,
+        conn: sqlite3.Connection,
+        log_id: int,
+        status: str,
+        parse_error: str | None = None,
+        job_id: int | None = None,
+    ) -> None:
+        conn.execute(
+            """
+            UPDATE logs
+            SET status = ?,
+                parse_error = ?,
+                job_id = COALESCE(?, job_id),
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (status, parse_error, job_id, log_id),
+        )
+
+    def mark_log_parsed(self, log_id: int) -> None:
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            self._update_log_status(conn, log_id, LOG_PARSED)
+            conn.commit()
+
+    def mark_log_invalid(self, log_id: int, parse_error: str | None = None) -> None:
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            self._update_log_status(conn, log_id, LOG_INVALID, parse_error=parse_error)
+            conn.commit()
+
+    def mark_log_duplicated(self, log_id: int) -> None:
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            self._update_log_status(conn, log_id, LOG_DUPLICATED)
+            conn.commit()
+
+    def mark_log_ignored(self, log_id: int) -> None:
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            self._update_log_status(conn, log_id, LOG_IGNORED)
+            conn.commit()
+
+    def mark_log_converted(self, log_id: int, job_id: int) -> None:
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            self._update_log_status(conn, log_id, LOG_CONVERTED, job_id=job_id)
+            conn.commit()
+
+    # ------------------------------------------------------------------
+    # Jobs
+    # ------------------------------------------------------------------
 
     def row_to_job(self, row: sqlite3.Row) -> ProductionJob:
         actual_printed = None
@@ -303,12 +614,13 @@ class ProductionRepository:
 
         return ProductionJob(
             id=pk_value,
+            log_id=row["log_id"] if "log_id" in row.keys() else None,
             job_id=row["job_id"],
             machine=row["machine"],
             computer_name=row["computer_name"],
             document=row["document"],
-            start_time=_parse_datetime(row["start_time"]) or datetime.min,
-            end_time=_parse_datetime(row["end_time"]) or datetime.min,
+            start_time=_parse_datetime(row["start_time"]),
+            end_time=_parse_datetime(row["end_time"]),
             duration_seconds=int(row["duration_seconds"] or 0),
             fabric=row["fabric"] if "fabric" in row.keys() else None,
             planned_length_m=float(row["planned_length_m"] or 0.0),
@@ -336,92 +648,43 @@ class ProductionRepository:
             suspicion_ratio=row["suspicion_ratio"] if "suspicion_ratio" in row.keys() else None,
             suspicion_missing_length_m=(
                 row["suspicion_missing_length_m"]
-                if "suspicion_missing_length_m" in row.keys() else None
+                if "suspicion_missing_length_m" in row.keys()
+                else None
             ),
             suspicion_marked_at=_parse_datetime(row["suspicion_marked_at"])
-            if "suspicion_marked_at" in row.keys() else None,
+            if "suspicion_marked_at" in row.keys()
+            else None,
             review_status=row["review_status"] if "review_status" in row.keys() else None,
             review_note=row["review_note"] if "review_note" in row.keys() else None,
             reviewed_by=row["reviewed_by"] if "reviewed_by" in row.keys() else None,
             reviewed_at=_parse_datetime(row["reviewed_at"]) if "reviewed_at" in row.keys() else None,
+            classification=row["classification"] if "classification" in row.keys() else None,
             created_at=_parse_datetime(row["created_at"]) if "created_at" in row.keys() else None,
             updated_at=_parse_datetime(row["updated_at"]) if "updated_at" in row.keys() else None,
         )
 
-    def row_to_roll(self, row: sqlite3.Row) -> Roll:
-        return Roll(
-            id=int(row["id"]),
-            roll_name=row["roll_name"],
-            machine=row["machine"],
-            fabric=row["fabric"],
-            status=row["status"],
-            note=row["note"],
-            created_at=_parse_datetime(row["created_at"]),
-            closed_at=_parse_datetime(row["closed_at"]),
-            updated_at=_parse_datetime(row["updated_at"]),
-        )
-
-    def row_to_roll_item(self, row: sqlite3.Row) -> RollItem:
-        return RollItem(
-            id=int(row["id"]),
-            roll_id=int(row["roll_id"]),
-            job_row_id=int(row["job_row_id"]),
-            job_id=row["job_id"],
-            document=row["document"],
-            machine=row["machine"],
-            fabric=row["fabric"],
-            sort_order=int(row["sort_order"]),
-            planned_length_m=float(row["planned_length_m"] or 0.0),
-            effective_printed_length_m=float(row["effective_printed_length_m"] or 0.0),
-            consumed_length_m=float(row["consumed_length_m"] or 0.0),
-            gap_before_m=float(row["gap_before_m"] or 0.0),
-            metric_category=row["metric_category"],
-            review_status=row["review_status"],
-            snapshot_print_status=row["snapshot_print_status"],
-            created_at=_parse_datetime(row["created_at"]),
-        )
-
-    def generate_roll_name(
+    def _job_unique_lookup(
         self,
-        machine: str,
-        opened_at: datetime | None = None,
-        conn: sqlite3.Connection | None = None,
-    ) -> str:
-        owns_connection = conn is None
-        conn = conn or self.connect()
-
-        try:
-            self.ensure_runtime_fields(conn)
-            self.ensure_roll_tables(conn)
-
-            dt = opened_at or datetime.now()
-            machine_code = machine.strip().upper()
-            date_key = dt.strftime("%Y%m%d")
-            prefix = f"{machine_code}_{date_key}_"
-
-            rows = conn.execute(
-                """
-                SELECT roll_name
-                FROM rolls
-                WHERE machine = ?
-                  AND roll_name LIKE ?
-                ORDER BY roll_name
-                """,
-                (machine_code, f"{prefix}%"),
-            ).fetchall()
-
-            max_seq = 0
-            for row in rows:
-                name = str(row["roll_name"])
-                suffix = name.rsplit("_", 1)[-1]
-                if suffix.isdigit():
-                    max_seq = max(max_seq, int(suffix))
-
-            next_seq = max_seq + 1
-            return f"{machine_code}_{date_key}_{next_seq:03d}"
-        finally:
-            if owns_connection:
-                conn.close()
+        conn: sqlite3.Connection,
+        job: ProductionJob,
+    ) -> int | None:
+        row = conn.execute(
+            f"""
+            SELECT id
+            FROM {self.table_name}
+            WHERE job_id = ?
+              AND start_time = ?
+              AND machine = ?
+              AND document = ?
+            """,
+            (
+                job.job_id,
+                _dt_to_iso(job.start_time),
+                job.machine,
+                job.document,
+            ),
+        ).fetchone()
+        return int(row["id"]) if row else None
 
     def list_jobs(self, limit: int | None = None) -> list[ProductionJob]:
         with self.connect() as conn:
@@ -471,27 +734,28 @@ class ProductionRepository:
             now_iso = _now_iso()
 
             payload = {
+                "log_id": getattr(job, "log_id", None),
                 "job_id": job.job_id,
                 "machine": job.machine,
                 "computer_name": job.computer_name,
                 "document": job.document,
-                "start_time": job.start_time.isoformat(timespec="seconds"),
-                "end_time": job.end_time.isoformat(timespec="seconds"),
-                "duration_seconds": int(job.duration_seconds),
+                "start_time": _dt_to_iso(job.start_time),
+                "end_time": _dt_to_iso(job.end_time),
+                "duration_seconds": int(job.duration_seconds or 0),
                 "fabric": job.fabric,
-                "planned_length_m": float(job.planned_length_m),
-                "actual_printed_length_m": float(job.actual_printed_length_m),
-                "gap_before_m": float(job.gap_before_m),
-                "consumed_length_m": float(job.consumed_length_m),
+                "planned_length_m": float(job.planned_length_m or 0.0),
+                "actual_printed_length_m": float(job.actual_printed_length_m or 0.0),
+                "gap_before_m": float(job.gap_before_m or 0.0),
+                "consumed_length_m": float(job.consumed_length_m or 0.0),
                 "driver": job.driver,
                 "source_path": job.source_path,
                 "job_type": job.job_type,
-                "is_rework": int(job.is_rework),
+                "is_rework": int(bool(job.is_rework)),
                 "notes": job.notes,
                 "print_status": job.print_status,
-                "counts_as_valid_production": int(job.counts_as_valid_production),
-                "counts_for_fabric_summary": int(job.counts_for_fabric_summary),
-                "counts_for_roll_export": int(job.counts_for_roll_export),
+                "counts_as_valid_production": int(bool(job.counts_as_valid_production)),
+                "counts_for_fabric_summary": int(bool(job.counts_for_fabric_summary)),
+                "counts_for_roll_export": int(bool(job.counts_for_roll_export)),
                 "error_reason": job.error_reason,
                 "operator_code": job.operator_code,
                 "operator_name": job.operator_name,
@@ -500,13 +764,12 @@ class ProductionRepository:
                 "suspicion_reason": job.suspicion_reason,
                 "suspicion_ratio": job.suspicion_ratio,
                 "suspicion_missing_length_m": job.suspicion_missing_length_m,
-                "suspicion_marked_at": job.suspicion_marked_at.isoformat(timespec="seconds")
-                if job.suspicion_marked_at else None,
+                "suspicion_marked_at": _dt_to_iso(job.suspicion_marked_at),
                 "review_status": job.review_status,
                 "review_note": job.review_note,
                 "reviewed_by": job.reviewed_by,
-                "reviewed_at": job.reviewed_at.isoformat(timespec="seconds")
-                if job.reviewed_at else None,
+                "reviewed_at": _dt_to_iso(job.reviewed_at),
+                "classification": getattr(job, "classification", None),
             }
 
             if "created_at" in columns and job.id is None:
@@ -516,22 +779,36 @@ class ProductionRepository:
 
             insert_columns = [name for name in payload.keys() if name in columns]
             placeholders = ", ".join("?" for _ in insert_columns)
-            column_sql = ", ".join(insert_columns)
             update_sql = ", ".join(
                 f"{name}=excluded.{name}" for name in insert_columns if name != "created_at"
             )
 
-            sql = f"""
-                INSERT INTO {self.table_name} ({column_sql})
+            conn.execute(
+                f"""
+                INSERT INTO {self.table_name} ({", ".join(insert_columns)})
                 VALUES ({placeholders})
                 ON CONFLICT(job_id, start_time, machine, document)
                 DO UPDATE SET {update_sql}
-            """
+                """,
+                [payload[name] for name in insert_columns],
+            )
 
-            params = [payload[name] for name in insert_columns]
-            cursor = conn.execute(sql, params)
+            job_row_id = self._job_unique_lookup(conn, job)
+            if job_row_id is None:
+                row = conn.execute("SELECT last_insert_rowid() AS row_id").fetchone()
+                job_row_id = int(row["row_id"] or 0)
+
+            log_id = getattr(job, "log_id", None)
+            if log_id is not None:
+                self._update_log_status(
+                    conn,
+                    int(log_id),
+                    LOG_CONVERTED,
+                    job_id=job_row_id,
+                )
+
             conn.commit()
-            return int(cursor.lastrowid or 0)
+            return int(job_row_id)
 
     def mark_job_suspicion(
         self,
@@ -742,9 +1019,87 @@ class ProductionRepository:
 
             return [self.row_to_job(row) for row in rows]
 
-    # ------------------------
+    # ------------------------------------------------------------------
     # Rolls
-    # ------------------------
+    # ------------------------------------------------------------------
+
+    def row_to_roll(self, row: sqlite3.Row) -> Roll:
+        return Roll(
+            id=int(row["id"]),
+            roll_name=row["roll_name"],
+            machine=row["machine"],
+            fabric=row["fabric"],
+            status=row["status"],
+            note=row["note"],
+            created_at=_parse_datetime(row["created_at"]),
+            closed_at=_parse_datetime(row["closed_at"]),
+            updated_at=_parse_datetime(row["updated_at"]),
+            exported_at=_parse_datetime(row["exported_at"]) if "exported_at" in row.keys() else None,
+            reviewed_at=_parse_datetime(row["reviewed_at"]) if "reviewed_at" in row.keys() else None,
+            reopened_at=_parse_datetime(row["reopened_at"]) if "reopened_at" in row.keys() else None,
+        )
+
+    def row_to_roll_item(self, row: sqlite3.Row) -> RollItem:
+        return RollItem(
+            id=int(row["id"]),
+            roll_id=int(row["roll_id"]),
+            job_row_id=int(row["job_row_id"]),
+            job_id=row["job_id"],
+            document=row["document"],
+            machine=row["machine"],
+            fabric=row["fabric"],
+            sort_order=int(row["sort_order"]),
+            planned_length_m=float(row["planned_length_m"] or 0.0),
+            effective_printed_length_m=float(row["effective_printed_length_m"] or 0.0),
+            consumed_length_m=float(row["consumed_length_m"] or 0.0),
+            gap_before_m=float(row["gap_before_m"] or 0.0),
+            metric_category=row["metric_category"],
+            review_status=row["review_status"],
+            snapshot_print_status=row["snapshot_print_status"],
+            created_at=_parse_datetime(row["created_at"]),
+        )
+
+    def generate_roll_name(
+        self,
+        machine: str,
+        opened_at: datetime | None = None,
+        conn: sqlite3.Connection | None = None,
+    ) -> str:
+        owns_connection = conn is None
+        conn = conn or self.connect()
+
+        try:
+            self.ensure_runtime_fields(conn)
+            self.ensure_roll_tables(conn)
+
+            dt = opened_at or datetime.now()
+            machine_code = machine.strip().upper()
+            date_key = dt.strftime("%Y%m%d")
+            prefix = f"{machine_code}_{date_key}_"
+
+            rows = conn.execute(
+                """
+                SELECT roll_name
+                FROM rolls
+                WHERE machine = ?
+                  AND roll_name LIKE ?
+                ORDER BY roll_name
+                """,
+                (machine_code, f"{prefix}%"),
+            ).fetchall()
+
+            max_seq = 0
+            for row in rows:
+                name = str(row["roll_name"])
+                suffix = name.rsplit("_", 1)[-1]
+                if suffix.isdigit():
+                    max_seq = max(max_seq, int(suffix))
+
+            next_seq = max_seq + 1
+            return f"{machine_code}_{date_key}_{next_seq:03d}"
+        finally:
+            if owns_connection:
+                conn.close()
 
     def create_roll(
         self,
@@ -766,7 +1121,15 @@ class ProductionRepository:
             try:
                 cursor = conn.execute(
                     """
-                    INSERT INTO rolls (roll_name, machine, fabric, status, note, created_at, updated_at)
+                    INSERT INTO rolls (
+                        roll_name,
+                        machine,
+                        fabric,
+                        status,
+                        note,
+                        created_at,
+                        updated_at
+                    )
                     VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     """,
                     (final_roll_name, machine_code, fabric, ROLL_OPEN, note),
@@ -927,7 +1290,7 @@ class ProductionRepository:
 
             roll = self.row_to_roll(roll_row)
             if roll.status != ROLL_OPEN:
-                raise ValueError(f"O rolo {roll.roll_name} já está fechado.")
+                raise ValueError(f"O rolo {roll.roll_name} não está em aberto.")
 
             job = self._get_job_for_roll(conn, job_row_id=job_row_id, job_id=job_id)
             if job.id is None:
@@ -1025,7 +1388,7 @@ class ProductionRepository:
 
             roll = self.row_to_roll(roll_row)
             if roll.status != ROLL_OPEN:
-                raise ValueError(f"O rolo {roll.roll_name} já está fechado.")
+                raise ValueError(f"O rolo {roll.roll_name} não está em aberto.")
 
             if job_row_id is None and job_id is None:
                 raise ValueError("Informe job_row_id ou job_id.")
@@ -1087,6 +1450,66 @@ class ProductionRepository:
             )
             conn.commit()
 
+    def mark_roll_exported(self, roll_id: int) -> None:
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            self.ensure_roll_tables(conn)
+            conn.execute(
+                """
+                UPDATE rolls
+                SET status = ?,
+                    exported_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (ROLL_EXPORTED, roll_id),
+            )
+            conn.commit()
+
+    def mark_roll_reviewed(self, roll_id: int) -> None:
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            self.ensure_roll_tables(conn)
+            conn.execute(
+                """
+                UPDATE rolls
+                SET status = ?,
+                    reviewed_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (ROLL_REVIEWED, roll_id),
+            )
+            conn.commit()
+
+    def reopen_roll(self, roll_id: int, note: str | None = None) -> None:
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            self.ensure_roll_tables(conn)
+
+            row = conn.execute("SELECT note FROM rolls WHERE id = ?", (roll_id,)).fetchone()
+            if not row:
+                raise ValueError(f"Rolo não encontrado: id={roll_id}")
+
+            current_note = row["note"] or ""
+            final_note = current_note
+            if note and note.strip():
+                stamp = f"[{_now_display()}] REOPEN: {note.strip()}"
+                final_note = f"{current_note}\n{stamp}".strip() if current_note else stamp
+
+            conn.execute(
+                """
+                UPDATE rolls
+                SET status = ?,
+                    note = ?,
+                    reopened_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (ROLL_REOPENED, final_note, roll_id),
+            )
+            conn.commit()
+
     def get_roll_summary(self, roll_id: int) -> dict:
         roll = self.get_roll(roll_id=roll_id)
         if not roll:
@@ -1123,3 +1546,8 @@ class ProductionRepository:
             "metric_counts": metric_counts,
             "fabric_totals": fabric_counts,
         }
+
+
+__all__ = [
+    "ProductionRepository",
+]

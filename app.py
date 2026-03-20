@@ -1,19 +1,22 @@
+from __future__ import annotations
+
 import argparse
 import hashlib
 from pathlib import Path
+from typing import Any
 
-from logs.service import import_job_from_log
+from logs.service import import_and_persist_log
 from storage.database import init_database
-from storage.repository import ProductionRepository
 from storage.log_sources_repository import LogSourceRepository
 from storage.import_audit_repository import ImportAuditRepository
 
 
 def format_meters(value: float) -> str:
-    return f"{value:.2f}".replace(".", ",")
+    return f"{float(value or 0.0):.2f}".replace(".", ",")
 
 
 def format_duration(seconds: int) -> str:
+    seconds = int(seconds or 0)
     hours = seconds // 3600
     minutes = (seconds % 3600) // 60
     secs = seconds % 60
@@ -25,6 +28,8 @@ def format_duration(seconds: int) -> str:
 
 
 def format_datetime(dt) -> str:
+    if dt is None:
+        return "-"
     return dt.strftime("%d/%m/%Y %H:%M:%S")
 
 
@@ -38,13 +43,71 @@ def compute_file_hash(path: Path) -> str:
     return sha.hexdigest()
 
 
+def row_get(row: Any, key: str, default=None):
+    try:
+        if row is None:
+            return default
+        if hasattr(row, "keys") and key in row.keys():
+            value = row[key]
+            return default if value is None else value
+        return row.get(key, default)
+    except Exception:
+        return default
+
+
+def safe_call(label: str, fn, *args, **kwargs):
+    try:
+        return fn(*args, **kwargs)
+    except Exception as exc:
+        print(f"[WARN] {label}: {exc}")
+        return None
+
+
+def safe_audit_register(audit_repo: ImportAuditRepository, **kwargs) -> None:
+    safe_call("audit register_file failed", audit_repo.register_file, **kwargs)
+
+
+def safe_audit_start_run(audit_repo: ImportAuditRepository, source_id: int) -> int | None:
+    return safe_call("audit start_run failed", audit_repo.start_run, source_id)
+
+
+def safe_audit_finish_run(
+    audit_repo: ImportAuditRepository,
+    run_id: int | None,
+    *,
+    total_found: int,
+    imported_count: int,
+    duplicate_count: int,
+    error_count: int,
+    notes: str | None = None,
+) -> None:
+    if run_id is None:
+        return
+
+    safe_call(
+        "audit finish_run failed",
+        audit_repo.finish_run,
+        run_id,
+        total_found=total_found,
+        imported_count=imported_count,
+        duplicate_count=duplicate_count,
+        error_count=error_count,
+        notes=notes,
+    )
+
+
 def iter_source_files(source_row, force_rescan: bool = False):
-    base_path = Path(source_row["path"])
+    base_path = Path(str(row_get(source_row, "path", "")))
+
+    if not str(base_path):
+        return []
 
     if not base_path.exists():
         return []
 
-    if source_row["recursive"]:
+    recursive = bool(row_get(source_row, "recursive", True))
+
+    if recursive:
         candidates = sorted(base_path.rglob("*.txt"))
     else:
         candidates = sorted(base_path.glob("*.txt"))
@@ -52,9 +115,14 @@ def iter_source_files(source_row, force_rescan: bool = False):
     if force_rescan:
         return candidates
 
-    last_mtime = source_row["last_successful_mtime"]
+    last_mtime = row_get(source_row, "last_successful_mtime", None)
 
     if last_mtime is None:
+        return candidates
+
+    try:
+        last_mtime = float(last_mtime)
+    except Exception:
         return candidates
 
     new_files = []
@@ -85,6 +153,22 @@ def parse_args():
     return parser.parse_args()
 
 
+def print_job_details(job) -> None:
+    print(f"Job ID: {job.job_id}")
+    print(f"Máquina: {job.machine}")
+    print(f"ComputerName: {job.computer_name}")
+    print(f"Documento: {job.document}")
+    print(f"Início: {format_datetime(job.start_time)}")
+    print(f"Fim: {format_datetime(job.end_time)}")
+    print(f"Duração: {format_duration(job.duration_seconds)}")
+    print(f"Tecido: {job.fabric or '-'}")
+    print(f"Tamanho do arquivo: {format_meters(job.planned_length_m)} m")
+    print(f"Consumo medido no log: {format_meters(job.consumed_length_m)} m")
+    print(f"Espaço técnico antes: {format_meters(job.gap_before_m)} m")
+    print(f"Impresso real da arte: {format_meters(job.actual_printed_length_m)} m")
+    print(f"Consumo operacional total: {format_meters(job.total_consumption_m)} m")
+
+
 def main():
     args = parse_args()
 
@@ -95,7 +179,6 @@ def main():
 
     init_database()
 
-    production_repo = ProductionRepository()
     source_repo = LogSourceRepository()
     audit_repo = ImportAuditRepository()
 
@@ -117,12 +200,17 @@ def main():
     grand_actual_printed = 0.0
 
     for source in sources:
+        source_id = row_get(source, "id")
+        source_name = row_get(source, "name", "<SEM NOME>")
+        source_path = row_get(source, "path", "<SEM CAMINHO>")
+
         print("=" * 60)
-        print(f"FONTE: {source['name']}")
-        print(f"Caminho: {source['path']}")
+        print(f"FONTE: {source_name}")
+        print(f"Caminho: {source_path}")
         print("=" * 60)
 
-        source_repo.update_last_scan_at(source["id"])
+        if source_id is not None:
+            safe_call("update_last_scan_at failed", source_repo.update_last_scan_at, source_id)
 
         files = iter_source_files(source, force_rescan=args.force_rescan)
         total = len(files)
@@ -134,7 +222,7 @@ def main():
                 print("Nenhum arquivo novo encontrado nesta fonte.\n")
             continue
 
-        run_id = audit_repo.start_run(source["id"])
+        run_id = safe_audit_start_run(audit_repo, int(source_id)) if source_id is not None else None
 
         imported = 0
         duplicates = 0
@@ -145,7 +233,7 @@ def main():
         total_gap = 0.0
         total_actual_printed = 0.0
 
-        max_successful_mtime = source["last_successful_mtime"]
+        max_successful_mtime = row_get(source, "last_successful_mtime", None)
 
         for file in files:
             try:
@@ -153,54 +241,70 @@ def main():
                 file_hash = compute_file_hash(file)
                 file_size = file.stat().st_size
 
-                job = import_job_from_log(file)
+                result = import_and_persist_log(
+                    path=file,
+                    raise_on_invalid=False,
+                )
+
+                log_record = result.get("log")
+                job = result.get("job")
+                is_duplicate = bool(result.get("is_duplicate"))
+                created_job = bool(result.get("created_job"))
+                error_message = result.get("error")
 
                 print(f"Arquivo: {file.name}")
-                print(f"Job ID: {job.job_id}")
-                print(f"Máquina: {job.machine}")
-                print(f"ComputerName: {job.computer_name}")
-                print(f"Documento: {job.document}")
-                print(f"Início: {format_datetime(job.start_time)}")
-                print(f"Fim: {format_datetime(job.end_time)}")
-                print(f"Duração: {format_duration(job.duration_seconds)}")
-                print(f"Tecido: {job.fabric or '-'}")
-                print(f"Tamanho do arquivo: {format_meters(job.planned_length_m)} m")
-                print(f"Consumo medido no log: {format_meters(job.consumed_length_m)} m")
-                print(f"Espaço técnico antes: {format_meters(job.gap_before_m)} m")
-                print(f"Impresso real da arte: {format_meters(job.actual_printed_length_m)} m")
-                print(f"Consumo operacional total: {format_meters(job.total_consumption_m)} m")
 
-                saved = production_repo.save(job)
+                if job is not None:
+                    print_job_details(job)
 
-                if saved:
-                    imported += 1
-                    total_planned_length += job.planned_length_m
-                    total_consumed_length += job.consumed_length_m
-                    total_gap += job.gap_before_m
-                    total_actual_printed += job.actual_printed_length_m
-                    status = "IMPORTED"
-
-                    if max_successful_mtime is None or file_mtime > max_successful_mtime:
-                        max_successful_mtime = file_mtime
-
-                    print("Status: IMPORTADO")
-                else:
+                if is_duplicate:
                     duplicates += 1
                     status = "DUPLICATE"
                     print("Status: DUPLICADO")
 
-                audit_repo.register_file(
-                    run_id=run_id,
-                    source_id=source["id"],
+                    # Duplicates should still advance the checkpoint to avoid
+                    # reprocessing the same modified file forever.
+                    if max_successful_mtime is None or file_mtime > float(max_successful_mtime):
+                        max_successful_mtime = file_mtime
+
+                elif created_job and job is not None:
+                    imported += 1
+                    status = "IMPORTED"
+
+                    total_planned_length += float(job.planned_length_m or 0.0)
+                    total_consumed_length += float(job.consumed_length_m or 0.0)
+                    total_gap += float(job.gap_before_m or 0.0)
+                    total_actual_printed += float(job.actual_printed_length_m or 0.0)
+
+                    if max_successful_mtime is None or file_mtime > float(max_successful_mtime):
+                        max_successful_mtime = file_mtime
+
+                    print("Status: IMPORTADO")
+
+                else:
+                    errors += 1
+                    status = "ERROR"
+                    print("Status: ERRO")
+                    print(f"Motivo: {error_message or 'Falha na importação/normalização do log'}")
+
+                safe_audit_register(
+                    audit_repo,
+                    run_id=run_id or 0,
+                    source_id=source_id or 0,
                     file_name=file.name,
                     file_path=str(file),
                     file_size=file_size,
                     file_hash=file_hash,
                     status=status,
-                    detected_job_id=job.job_id,
-                    detected_computer_name=job.computer_name,
-                    detected_machine=job.machine,
+                    error_message=error_message,
+                    detected_job_id=(job.job_id if job else None),
+                    detected_computer_name=(job.computer_name if job else None),
+                    detected_machine=(job.machine if job else None),
                 )
+
+                if log_record is not None:
+                    print(f"Log ID: {log_record.id}")
+                    print(f"Log status: {log_record.status}")
 
                 print()
 
@@ -214,9 +318,10 @@ def main():
                     file_hash = None
                     file_size = None
 
-                audit_repo.register_file(
-                    run_id=run_id,
-                    source_id=source["id"],
+                safe_audit_register(
+                    audit_repo,
+                    run_id=run_id or 0,
+                    source_id=source_id or 0,
                     file_name=file.name,
                     file_path=str(file),
                     file_size=file_size,
@@ -229,10 +334,16 @@ def main():
                 print("Status: ERRO")
                 print(f"Motivo: {e}\n")
 
-        if max_successful_mtime is not None:
-            source_repo.update_last_successful_mtime(source["id"], max_successful_mtime)
+        if source_id is not None and max_successful_mtime is not None:
+            safe_call(
+                "update_last_successful_mtime failed",
+                source_repo.update_last_successful_mtime,
+                source_id,
+                max_successful_mtime,
+            )
 
-        audit_repo.finish_run(
+        safe_audit_finish_run(
+            audit_repo,
             run_id,
             total_found=total,
             imported_count=imported,
@@ -241,7 +352,7 @@ def main():
         )
 
         print("-" * 40)
-        print(f"Resumo da fonte: {source['name']}")
+        print(f"Resumo da fonte: {source_name}")
         print(f"Logs encontrados: {total}")
         print(f"Importados: {imported}")
         print(f"Duplicados: {duplicates}")

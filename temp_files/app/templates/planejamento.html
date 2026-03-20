@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+
+{% block title %}Planejamento — Nexor{% endblock %}
+{% block page_title %}Planejamento{% endblock %}
+
+{% block content %}
+<div>
+  <div class="section-header">
+    <div>
+      <div class="section-title">Planejamento de Produção</div>
+      <div class="section-sub">Visualize e gerencie o planejamento de produção</div>
+    </div>
+    <button class="btn-primary">+ Novo Planejamento</button>
+  </div>
+
+  <div class="card" style="padding:0;overflow:hidden">
+    <table>
+      <thead>
+        <tr>
+          <th>Ordem</th>
+          <th>Tecido</th>
+          <th>Máquina</th>
+          <th>Operador</th>
+          <th>Metros</th>
+          <th>Estimado</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td colspan="7"><div class="empty-state" style="padding:30px"><p>Nenhum planejamento registrado</p></div></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,362 @@
+{% extends "base.html" %}
+
+{% block page_title %}Revisão de Inconsistências{% endblock %}
+{% block page_action_btn %}Atualizar{% endblock %}
+
+{% block content %}
+<div class="page-container">
+    <div class="section">
+        <h3>Inconsistências Detectadas</h3>
+        <p class="section-description">
+            Revise e corrija inconsistências detectadas no sistema.
+        </p>
+
+        <!-- Filtro por Severidade -->
+        <div class="filter-group">
+            <div class="filter-item">
+                <label>Filtrar por Severidade:</label>
+                <select id="filter-severity" onchange="filterInconsistencies()">
+                    <option value="">Todas</option>
+                    <option value="high">Alta</option>
+                    <option value="medium">Média</option>
+                    <option value="low">Baixa</option>
+                </select>
+            </div>
+            <div class="filter-item">
+                <label>Filtrar por Tipo:</label>
+                <select id="filter-type" onchange="filterInconsistencies()">
+                    <option value="">Todos</option>
+                    <option value="empty_roll">Rolo Vazio</option>
+                    <option value="unknown_fabric">Tecido Desconhecido</option>
+                    <option value="status_mismatch">Status Inconsistente</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Lista de Inconsistências -->
+        <div id="inconsistencies-container">
+            <!-- Preenchido dinamicamente -->
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Detalhes e Ação -->
+<div id="action-modal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3 id="action-modal-title">Inconsistência</h3>
+            <button class="modal-close" onclick="closeModal('action-modal')">×</button>
+        </div>
+        <div class="modal-body">
+            <div id="action-modal-body">
+                <!-- Conteúdo dinâmico -->
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal('action-modal')">Cancelar</button>
+            <button class="btn btn-primary" id="action-btn" onclick="executeAction()">Executar Ação</button>
+        </div>
+    </div>
+</div>
+
+<script>
+let allInconsistencies = [];
+let currentAction = null;
+
+// ============================================================
+// Loading
+// ============================================================
+
+function loadInconsistencies() {
+    fetch('/api/inconsistencies')
+        .then(r => r.json())
+        .then(data => {
+            allInconsistencies = data.items;
+            displayInconsistencies(allInconsistencies);
+        })
+        .catch(err => {
+            console.error('Erro ao carregar inconsistências:', err);
+            document.getElementById('inconsistencies-container').innerHTML = 
+                '<p class="error">Erro ao carregar inconsistências</p>';
+        });
+}
+
+function displayInconsistencies(items) {
+    const container = document.getElementById('inconsistencies-container');
+
+    if (items.length === 0) {
+        container.innerHTML = '<div class="empty-state">Nenhuma inconsistência detectada ✓</div>';
+        return;
+    }
+
+    container.innerHTML = items.map((item, index) => `
+        <div class="inconsistency-card severity-${item.severity}">
+            <div class="card-header">
+                <span class="badge badge-${item.type}">${item.type}</span>
+                <span class="severity-label">Severidade: ${item.severity.toUpperCase()}</span>
+            </div>
+            <div class="card-body">
+                <p><strong>Mensagem:</strong> ${item.message}</p>
+                ${item.roll_id ? `<p><strong>Rolo ID:</strong> ${item.roll_id}</p>` : ''}
+                ${item.roll_name ? `<p><strong>Rolo:</strong> ${item.roll_name}</p>` : ''}
+                ${item.count ? `<p><strong>Quantidade:</strong> ${item.count}</p>` : ''}
+            </div>
+            <div class="card-footer">
+                <button class="btn btn-sm btn-primary" onclick="openActionModal(${index})">
+                    Resolver
+                </button>
+            </div>
+        </div>
+    `).join('');
+}
+
+function filterInconsistencies() {
+    const severity = document.getElementById('filter-severity').value;
+    const type = document.getElementById('filter-type').value;
+
+    const filtered = allInconsistencies.filter(item => {
+        const matchSeverity = !severity || item.severity === severity;
+        const matchType = !type || item.type === type;
+        return matchSeverity && matchType;
+    });
+
+    displayInconsistencies(filtered);
+}
+
+// ============================================================
+// Actions
+// ============================================================
+
+function openActionModal(index) {
+    const item = allInconsistencies[index];
+    const title = document.getElementById('action-modal-title');
+    const body = document.getElementById('action-modal-body');
+    const actionBtn = document.getElementById('action-btn');
+
+    title.textContent = `Resolver: ${item.type}`;
+
+    let actionHtml = '';
+    let actionLabel = '';
+
+    switch (item.type) {
+        case 'empty_roll':
+            actionHtml = `
+                <p>Este rolo não possui jobs atribuídos.</p>
+                <p><strong>Rolo:</strong> ${item.roll_name}</p>
+                <p><strong>Opções:</strong></p>
+                <ul>
+                    <li>Deletar rolo vazio</li>
+                    <li>Atribuir jobs manualmente</li>
+                </ul>
+                <label>
+                    <input type="radio" name="action" value="delete" checked> Deletar rolo
+                </label>
+            `;
+            actionLabel = 'Deletar Rolo';
+            currentAction = { type: 'delete_empty_roll', roll_id: item.roll_id };
+            break;
+
+        case 'unknown_fabric':
+            actionHtml = `
+                <p>${item.count} jobs possuem tecido desconhecido.</p>
+                <p><strong>Ação recomendada:</strong> Normalizar tecidos no cadastro.</p>
+                <label>
+                    Novo tecido:
+                    <input type="text" id="new-fabric" placeholder="Ex: OXFORD 300g">
+                </label>
+            `;
+            actionLabel = 'Normalizar Tecidos';
+            currentAction = { type: 'normalize_fabric', count: item.count };
+            break;
+
+        case 'status_mismatch':
+            actionHtml = `
+                <p>Este rolo tem status inconsistente.</p>
+                <p><strong>Rolo:</strong> ${item.roll_name}</p>
+                <p><strong>Problema:</strong> Status é "aberto" mas possui data de fechamento.</p>
+                <label>
+                    <input type="radio" name="action" value="fix_status" checked> Corrigir status para "fechado"
+                </label>
+            `;
+            actionLabel = 'Corrigir Status';
+            currentAction = { type: 'fix_status_mismatch', roll_id: item.roll_id };
+            break;
+
+        default:
+            actionHtml = '<p>Ação não disponível para este tipo de inconsistência.</p>';
+            actionLabel = 'Fechar';
+    }
+
+    body.innerHTML = actionHtml;
+    actionBtn.textContent = actionLabel;
+    openModal('action-modal');
+}
+
+function executeAction() {
+    if (!currentAction) {
+        alert('Nenhuma ação selecionada');
+        return;
+    }
+
+    switch (currentAction.type) {
+        case 'delete_empty_roll':
+            deleteEmptyRoll(currentAction.roll_id);
+            break;
+        case 'normalize_fabric':
+            normalizeFabric();
+            break;
+        case 'fix_status_mismatch':
+            fixStatusMismatch(currentAction.roll_id);
+            break;
+    }
+}
+
+function deleteEmptyRoll(rollId) {
+    if (!confirm('Tem certeza que deseja deletar este rolo?')) {
+        return;
+    }
+
+    // TODO: Implementar endpoint de deleção
+    alert('Função de deleção ainda não implementada');
+    closeModal('action-modal');
+}
+
+function normalizeFabric() {
+    const newFabric = document.getElementById('new-fabric').value;
+
+    if (!newFabric) {
+        alert('Digite um novo tecido');
+        return;
+    }
+
+    // TODO: Implementar endpoint de normalização
+    alert('Função de normalização ainda não implementada');
+    closeModal('action-modal');
+}
+
+function fixStatusMismatch(rollId) {
+    // TODO: Implementar endpoint de correção de status
+    alert('Função de correção de status ainda não implementada');
+    closeModal('action-modal');
+}
+
+// ============================================================
+// Modal
+// ============================================================
+
+function openModal(modalId) {
+    document.getElementById(modalId).style.display = 'flex';
+}
+
+function closeModal(modalId) {
+    document.getElementById(modalId).style.display = 'none';
+}
+
+window.onclick = function(event) {
+    if (event.target.classList.contains('modal')) {
+        event.target.style.display = 'none';
+    }
+}
+
+// ============================================================
+// Init
+// ============================================================
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadInconsistencies();
+});
+</script>
+
+<style>
+.inconsistency-card {
+    border: 1px solid #ddd;
+    border-radius: 0.5rem;
+    padding: 1rem;
+    margin-bottom: 1rem;
+    background-color: #f9f9f9;
+    border-left: 4px solid #999;
+}
+
+.inconsistency-card.severity-high {
+    border-left-color: #dc3545;
+    background-color: #fff5f5;
+}
+
+.inconsistency-card.severity-medium {
+    border-left-color: #ffc107;
+    background-color: #fffbf0;
+}
+
+.inconsistency-card.severity-low {
+    border-left-color: #28a745;
+    background-color: #f0f9f5;
+}
+
+.card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+}
+
+.card-body {
+    margin: 1rem 0;
+}
+
+.card-body p {
+    margin: 0.5rem 0;
+}
+
+.card-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+
+.severity-label {
+    font-weight: bold;
+    font-size: 0.85em;
+}
+
+.severity-high .severity-label {
+    color: #dc3545;
+}
+
+.severity-medium .severity-label {
+    color: #ffc107;
+}
+
+.severity-low .severity-label {
+    color: #28a745;
+}
+
+.badge-empty_roll {
+    background-color: #dc3545;
+    color: white;
+}
+
+.badge-unknown_fabric {
+    background-color: #ffc107;
+    color: #000;
+}
+
+.badge-status_mismatch {
+    background-color: #dc3545;
+    color: white;
+}
+
+.empty-state {
+    text-align: center;
+    padding: 2rem;
+    color: #6c757d;
+    font-size: 1.1em;
+}
+
+.error {
+    color: #dc3545;
+    padding: 1rem;
+    background-color: #fff5f5;
+    border-radius: 0.5rem;
+}
+</style>
+{% endblock %}

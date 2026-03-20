@@ -1,0 +1,699 @@
+{% extends "base.html" %}
+
+{% block page_title %}Planejamento de Produção{% endblock %}
+{% block page_action_btn %}Gerar Plano{% endblock %}
+
+{% block content %}
+<div class="page-container">
+    <div class="tabs">
+        <button class="tab-btn active" onclick="switchTab('jobs-list')">
+            <span class="icon">📋</span> Jobs Disponíveis
+        </button>
+        <button class="tab-btn" onclick="switchTab('plan-view')">
+            <span class="icon">📅</span> Plano de Produção
+        </button>
+        <button class="tab-btn" onclick="switchTab('timeline-view')">
+            <span class="icon">⏱️</span> Timeline
+        </button>
+        <button class="tab-btn" onclick="switchTab('utilization')">
+            <span class="icon">📊</span> Utilização
+        </button>
+        <button class="tab-btn" onclick="switchTab('gaps-view')">
+            <span class="icon">⚠️</span> Gaps
+        </button>
+        <button class="tab-btn" onclick="switchTab('gantt-view')">
+            <span class="icon">📈</span> Gantt
+        </button>
+    </div>
+
+    <!-- Tab 1: Jobs Disponíveis -->
+    <div id="jobs-list" class="tab-content active">
+        <div class="section">
+            <h3>Jobs Disponíveis para Planejamento</h3>
+            
+            <!-- Filtros -->
+            <div class="filter-group">
+                <div class="filter-item">
+                    <label>Máquina:</label>
+                    <select id="filter-machine" onchange="filterJobs()">
+                        <option value="">Todas</option>
+                    </select>
+                </div>
+                <div class="filter-item">
+                    <label>Tecido:</label>
+                    <select id="filter-fabric" onchange="filterJobs()">
+                        <option value="">Todos</option>
+                    </select>
+                </div>
+                <div class="filter-item">
+                    <label>Prioridade:</label>
+                    <select id="filter-priority" onchange="filterJobs()">
+                        <option value="">Todas</option>
+                        <option value="1">Alta</option>
+                        <option value="2">Média</option>
+                        <option value="3">Baixa</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Tabela de Jobs -->
+            <div class="data-table-wrapper">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th><input type="checkbox" id="select-all-jobs" onchange="toggleSelectAllJobs()"></th>
+                            <th>ID</th>
+                            <th>Documento</th>
+                            <th>Tecido</th>
+                            <th>Comprimento (m)</th>
+                            <th>Máquina</th>
+                            <th>Prioridade</th>
+                        </tr>
+                    </thead>
+                    <tbody id="jobs-tbody">
+                        <tr>
+                            <td colspan="7" class="empty-state">Carregando...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <!-- Ações -->
+            <div class="action-bar" id="jobs-action-bar" style="display: none;">
+                <span id="selected-jobs-count">0 selecionados</span>
+                <button class="btn btn-primary" onclick="planSelectedJobs()">
+                    📅 Planejar Selecionados
+                </button>
+                <button class="btn btn-secondary" onclick="optimizeSequence()">
+                    ⚡ Otimizar Sequência
+                </button>
+            </div>
+
+            <!-- Botão para planejar todos -->
+            <div style="margin-top: 1rem;">
+                <button class="btn btn-primary" onclick="planAllJobs()">
+                    📅 Planejar Todos os Jobs
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab 2: Plano de Produção -->
+    <div id="plan-view" class="tab-content">
+        <div class="section">
+            <h3>Plano de Produção</h3>
+            
+            <!-- Resumo -->
+            <div class="summary-cards">
+                <div class="summary-card">
+                    <span class="label">Total de Jobs</span>
+                    <span class="value" id="summary-jobs">0</span>
+                </div>
+                <div class="summary-card">
+                    <span class="label">Total (m)</span>
+                    <span class="value" id="summary-length">0</span>
+                </div>
+                <div class="summary-card">
+                    <span class="label">Tempo Total (h)</span>
+                    <span class="value" id="summary-time">0</span>
+                </div>
+                <div class="summary-card">
+                    <span class="label">Conclusão Estimada</span>
+                    <span class="value" id="summary-completion">-</span>
+                </div>
+            </div>
+
+            <!-- Tabela de Plano -->
+            <div class="data-table-wrapper">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Job ID</th>
+                            <th>Máquina</th>
+                            <th>Tecido</th>
+                            <th>Comprimento (m)</th>
+                            <th>Início</th>
+                            <th>Fim</th>
+                            <th>Setup (min)</th>
+                            <th>Processamento (min)</th>
+                            <th>Total (min)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="plan-tbody">
+                        <tr>
+                            <td colspan="9" class="empty-state">Nenhum plano gerado</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab 3: Timeline -->
+    <div id="timeline-view" class="tab-content">
+        <div class="section">
+            <h3>Timeline de Máquinas</h3>
+            
+            <!-- Seletor de Máquina -->
+            <div class="filter-group">
+                <div class="filter-item">
+                    <label>Máquina:</label>
+                    <select id="timeline-machine" onchange="updateTimeline()">
+                        <option value="">Selecione uma máquina</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Timeline Visual -->
+            <div id="timeline-container" style="margin-top: 2rem;">
+                <!-- Preenchido dinamicamente -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab 4: Utilização -->
+    <div id="utilization" class="tab-content">
+        <div class="section">
+            <h3>Utilização de Máquinas</h3>
+            
+            <div class="data-table-wrapper">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Máquina</th>
+                            <th>Jobs</th>
+                            <th>Total (m)</th>
+                            <th>Tempo Proc. (min)</th>
+                            <th>Utilização (%)</th>
+                        </tr>
+                    </thead>
+                    <tbody id="utilization-tbody">
+                        <tr>
+                            <td colspan="5" class="empty-state">Nenhum plano gerado</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab 5: Gaps -->
+    <div id="gaps-view" class="tab-content">
+        <div class="section">
+            <h3>Gaps entre Jobs</h3>
+            
+            <div class="data-table-wrapper">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Maquina</th>
+                            <th>De Job</th>
+                            <th>Para Job</th>
+                            <th>Gap (min)</th>
+                            <th>De</th>
+                            <th>Para</th>
+                        </tr>
+                    </thead>
+                    <tbody id="gaps-tbody">
+                        <tr>
+                            <td colspan="6" class="empty-state">Nenhum plano gerado</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            
+            <div style="margin-top: 2rem;">
+                <h4>Resumo de Gaps por Maquina</h4>
+                <div id="gaps-summary" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 1rem;"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab 6: Gantt -->
+    <div id="gantt-view" class="tab-content">
+        <div class="section">
+            <h3>Grafico de Gantt</h3>
+            
+            <div id="gantt-container" style="overflow-x: auto; margin-top: 2rem;">
+                <!-- Preenchido dinamicamente -->
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+let allJobs = [];
+let currentPlan = null;
+
+// ============================================================
+// Loading
+// ============================================================
+
+function loadJobs() {
+    fetch('/api/jobs?limit=1000')
+        .then(r => r.json())
+        .then(jobs => {
+            allJobs = jobs;
+            displayJobs(jobs);
+        })
+        .catch(err => {
+            console.error('Erro ao carregar jobs:', err);
+            document.getElementById('jobs-tbody').innerHTML = 
+                '<tr><td colspan="7" class="empty-state">Erro ao carregar dados</td></tr>';
+        });
+}
+
+function loadMachines() {
+    fetch('/api/machines')
+        .then(r => r.json())
+        .then(machines => {
+            const selects = [
+                document.getElementById('filter-machine'),
+                document.getElementById('timeline-machine'),
+            ];
+            
+            selects.forEach(select => {
+                machines.forEach(m => {
+                    const option = document.createElement('option');
+                    option.value = m.code;
+                    option.textContent = m.name;
+                    select.appendChild(option);
+                });
+            });
+        });
+}
+
+function loadFabrics() {
+    fetch('/api/fabrics')
+        .then(r => r.json())
+        .then(fabrics => {
+            const select = document.getElementById('filter-fabric');
+            fabrics.forEach(f => {
+                const option = document.createElement('option');
+                option.value = f.name;
+                option.textContent = f.name;
+                select.appendChild(option);
+            });
+        });
+}
+
+// ============================================================
+// Display
+// ============================================================
+
+function displayJobs(jobs) {
+    const tbody = document.getElementById('jobs-tbody');
+
+    if (jobs.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="empty-state">Nenhum job disponível</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = jobs.map(job => `
+        <tr>
+            <td><input type="checkbox" class="job-checkbox" value="${job.id}"></td>
+            <td>${job.id}</td>
+            <td>${job.document}</td>
+            <td>${job.fabric}</td>
+            <td>${job.planned_length_m}</td>
+            <td>${job.machine}</td>
+            <td><span class="priority-${job.priority}">Média</span></td>
+        </tr>
+    `).join('');
+}
+
+function displayPlan(plan) {
+    const tbody = document.getElementById('plan-tbody');
+
+    if (!plan || plan.schedule.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="9" class="empty-state">Nenhum plano gerado</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = plan.schedule.map(job => {
+        const start = new Date(job.start_time).toLocaleString('pt-BR');
+        const end = new Date(job.end_time).toLocaleString('pt-BR');
+        
+        return `
+            <tr>
+                <td>${job.job_id}</td>
+                <td>${job.machine_code}</td>
+                <td>${job.fabric}</td>
+                <td>${job.planned_length_m}</td>
+                <td>${start}</td>
+                <td>${end}</td>
+                <td>${job.setup_time_minutes}</td>
+                <td>${job.processing_time_minutes.toFixed(2)}</td>
+                <td>${job.total_time_minutes.toFixed(2)}</td>
+            </tr>
+        `;
+    }).join('');
+
+    // Atualizar resumo
+    document.getElementById('summary-jobs').textContent = plan.schedule.length;
+    document.getElementById('summary-length').textContent = plan.summary.total_length_m;
+    document.getElementById('summary-time').textContent = plan.summary.total_time_hours;
+    document.getElementById('summary-completion').textContent = 
+        new Date(plan.summary.estimated_completion).toLocaleString('pt-BR');
+}
+
+function displayUtilization(report) {
+    const tbody = document.getElementById('utilization-tbody');
+
+    if (!report || Object.keys(report).length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="empty-state">Nenhum plano gerado</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = Object.entries(report).map(([code, data]) => `
+        <tr>
+            <td>${data.name}</td>
+            <td>${data.jobs_count}</td>
+            <td>${data.total_length_m}</td>
+            <td>${data.total_processing_time_minutes.toFixed(2)}</td>
+            <td>
+                <div class="utilization-bar">
+                    <div class="utilization-fill" style="width: ${data.utilization_percent}%"></div>
+                </div>
+                <span>${data.utilization_percent.toFixed(1)}%</span>
+            </td>
+        </tr>
+    `).join('');
+}
+
+function updateTimeline() {
+    if (!currentPlan) {
+        document.getElementById('timeline-container').innerHTML = 
+            '<p class="empty-state">Gere um plano primeiro</p>';
+        return;
+    }
+
+    const machineCode = document.getElementById('timeline-machine').value;
+    if (!machineCode) return;
+
+    const machineJobs = currentPlan.schedule.filter(j => j.machine_code === machineCode);
+    machineJobs.sort((a, b) => new Date(a.start_time) - new Date(b.start_time));
+
+    let html = '<div class="timeline">';
+    
+    machineJobs.forEach(job => {
+        const start = new Date(job.start_time);
+        const end = new Date(job.end_time);
+        const duration = (end - start) / (1000 * 60); // minutos
+        
+        html += `
+            <div class="timeline-item">
+                <div class="timeline-time">${start.toLocaleTimeString('pt-BR')}</div>
+                <div class="timeline-job" style="width: ${Math.min(duration / 10, 100)}%">
+                    <strong>${job.fabric}</strong><br>
+                    ${job.planned_length_m}m | ${duration.toFixed(0)}min
+                </div>
+            </div>
+        `;
+    });
+
+    html += '</div>';
+    document.getElementById('timeline-container').innerHTML = html;
+}
+
+// ============================================================
+// Actions
+// ============================================================
+
+function filterJobs() {
+    const machine = document.getElementById('filter-machine').value;
+    const fabric = document.getElementById('filter-fabric').value;
+    const priority = document.getElementById('filter-priority').value;
+
+    const filtered = allJobs.filter(job => {
+        const matchMachine = !machine || job.machine === machine;
+        const matchFabric = !fabric || job.fabric === fabric;
+        const matchPriority = !priority || job.priority === parseInt(priority);
+        return matchMachine && matchFabric && matchPriority;
+    });
+
+    displayJobs(filtered);
+}
+
+function toggleSelectAllJobs() {
+    const isChecked = document.getElementById('select-all-jobs').checked;
+    document.querySelectorAll('.job-checkbox').forEach(cb => {
+        cb.checked = isChecked;
+    });
+    updateJobsActionBar();
+}
+
+function updateJobsActionBar() {
+    const selected = document.querySelectorAll('.job-checkbox:checked').length;
+    const actionBar = document.getElementById('jobs-action-bar');
+
+    if (selected > 0) {
+        actionBar.style.display = 'flex';
+        document.getElementById('selected-jobs-count').textContent = `${selected} selecionado(s)`;
+    } else {
+        actionBar.style.display = 'none';
+    }
+}
+
+document.addEventListener('change', function(e) {
+    if (e.target.classList.contains('job-checkbox')) {
+        updateJobsActionBar();
+    }
+});
+
+function planSelectedJobs() {
+    const selected = Array.from(document.querySelectorAll('.job-checkbox:checked'))
+        .map(cb => parseInt(cb.value));
+
+    if (selected.length === 0) {
+        alert('Selecione pelo menos um job');
+        return;
+    }
+
+    const selectedJobs = allJobs.filter(j => selected.includes(j.id));
+    generatePlan(selectedJobs);
+}
+
+function planAllJobs() {
+    generatePlan(allJobs);
+}
+
+function optimizeSequence() {
+    fetch('/api/planning/optimize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobs: allJobs }),
+    })
+    .then(r => r.json())
+    .then(data => {
+        alert('Sequência otimizada! Agora planeje os jobs.');
+    })
+    .catch(err => console.error('Erro:', err));
+}
+
+function generatePlan(jobs) {
+    fetch('/api/planning/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobs: jobs }),
+    })
+    .then(r => r.json())
+    .then(data => {
+        currentPlan = data;
+        displayPlan(data);
+        displayUtilization(data.utilization);
+        loadGaps(jobs);
+        loadGantt(jobs);
+        switchTab('plan-view');
+    })
+    .catch(err => {
+        console.error('Erro ao gerar plano:', err);
+        alert('Erro ao gerar plano');
+    });
+}
+
+function loadGaps(jobs) {
+    fetch('/api/planning/gaps', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobs: jobs }),
+    })
+    .then(r => r.json())
+    .then(data => {
+        displayGaps(data.gaps);
+    })
+    .catch(err => console.error('Erro ao carregar gaps:', err));
+}
+
+function loadGantt(jobs) {
+    fetch('/api/planning/gantt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobs: jobs }),
+    })
+    .then(r => r.json())
+    .then(data => {
+        displayGantt(data.gantt);
+    })
+    .catch(err => console.error('Erro ao carregar Gantt:', err));
+}
+
+function displayGaps(gaps) {
+    let html = '';
+    let summaryHtml = '';
+    
+    for (const [machine, data] of Object.entries(gaps)) {
+        data.gaps.forEach(gap => {
+            html += `
+                <tr>
+                    <td>${machine}</td>
+                    <td>${gap.from_job_id}</td>
+                    <td>${gap.to_job_id}</td>
+                    <td>${gap.gap_minutes}</td>
+                    <td>${new Date(gap.from_time).toLocaleTimeString('pt-BR')}</td>
+                    <td>${new Date(gap.to_time).toLocaleTimeString('pt-BR')}</td>
+                </tr>
+            `;
+        });
+        
+        summaryHtml += `
+            <div class="summary-card">
+                <div class="label">${data.name}</div>
+                <div class="value">${data.total_gap_minutes} min</div>
+                <div style="font-size: 0.9em; margin-top: 0.5rem;">${data.gaps.length} gaps</div>
+            </div>
+        `;
+    }
+    
+    document.getElementById('gaps-tbody').innerHTML = html || '<tr><td colspan="6" class="empty-state">Sem gaps</td></tr>';
+    document.getElementById('gaps-summary').innerHTML = summaryHtml;
+}
+
+function displayGantt(ganttData) {
+    let html = '<table class="data-table"><thead><tr><th>Job</th><th>Maquina</th><th>Tecido</th><th>Inicio</th><th>Fim</th><th>Duracao (min)</th></tr></thead><tbody>';
+    
+    ganttData.forEach(job => {
+        html += `
+            <tr>
+                <td>${job.job_id}</td>
+                <td>${job.machine}</td>
+                <td>${job.fabric}</td>
+                <td>${new Date(job.start_time).toLocaleTimeString('pt-BR')}</td>
+                <td>${new Date(job.end_time).toLocaleTimeString('pt-BR')}</td>
+                <td>${job.duration_minutes}</td>
+            </tr>
+        `;
+    });
+    
+    html += '</tbody></table>';
+    document.getElementById('gantt-container').innerHTML = html;
+}
+
+// ============================================================
+// Tabs
+// ============================================================
+
+function switchTab(tabName) {
+    document.querySelectorAll('.tab-content').forEach(tab => {
+        tab.classList.remove('active');
+    });
+    
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    
+    document.getElementById(tabName).classList.add('active');
+    event.target.classList.add('active');
+}
+
+// ============================================================
+// Init
+// ============================================================
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadJobs();
+    loadMachines();
+    loadFabrics();
+});
+</script>
+
+<style>
+.summary-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+
+.summary-card {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 1.5rem;
+    border-radius: 0.5rem;
+    text-align: center;
+}
+
+.summary-card .label {
+    display: block;
+    font-size: 0.9em;
+    opacity: 0.9;
+    margin-bottom: 0.5rem;
+}
+
+.summary-card .value {
+    display: block;
+    font-size: 1.8em;
+    font-weight: bold;
+}
+
+.utilization-bar {
+    width: 100%;
+    height: 20px;
+    background-color: #e9ecef;
+    border-radius: 0.25rem;
+    overflow: hidden;
+    margin-bottom: 0.5rem;
+}
+
+.utilization-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #28a745, #20c997);
+    transition: width 0.3s ease;
+}
+
+.timeline {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+}
+
+.timeline-item {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+}
+
+.timeline-time {
+    min-width: 150px;
+    font-weight: bold;
+    color: #495057;
+}
+
+.timeline-job {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 0.75rem;
+    border-radius: 0.5rem;
+    min-height: 60px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    font-size: 0.9em;
+}
+
+.priority-1 { color: #dc3545; font-weight: bold; }
+.priority-2 { color: #ffc107; font-weight: bold; }
+.priority-3 { color: #28a745; font-weight: bold; }
+</style>
+{% endblock %}

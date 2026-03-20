@@ -1,0 +1,372 @@
+{% extends "base.html" %}
+
+{% block title %}Home — Nexor{% endblock %}
+{% block page_title %}Home{% endblock %}
+
+{% block content %}
+<div id="home-content">
+  <!-- Métricas em 4 colunas -->
+  <div class="metrics-grid">
+    <div class="metric-card">
+      <div class="metric-label">LOGS DISPONÍVEIS</div>
+      <div class="metric-value" id="card-available">4</div>
+      <div class="metric-detail">prontos para seleção</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">ROLOS EM ABERTO</div>
+      <div class="metric-value" id="card-open">1</div>
+      <div class="metric-detail">aguardando fechamento</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">ALERTAS / SUSPEITAS</div>
+      <div class="metric-value" id="card-suspects">1</div>
+      <div class="metric-detail">itens para revisar</div>
+    </div>
+    <div class="metric-card">
+      <div class="metric-label">ÚLTIMO ROLO FECHADO</div>
+      <div class="metric-value" id="card-last">ROLO-2025-0002</div>
+      <div class="metric-detail" id="card-last-date">15/03/2026</div>
+    </div>
+  </div>
+
+  <!-- Ações Rápidas e Alertas em 2 colunas -->
+  <div class="home-grid">
+    <!-- Coluna Esquerda: Ações Rápidas + Alertas -->
+    <div>
+      <div class="section-header"><span class="section-title">Ações Rápidas</span></div>
+      <div class="quick-actions">
+        <a class="qa-item" onclick="navigate('operacao')">
+          <span class="qa-icon">⊕</span>
+          Novo Fechamento
+        </a>
+        <a class="qa-item" onclick="navigate('rolos')">
+          <span class="qa-icon">📋</span>
+          Consultar Rolos
+        </a>
+        <a class="qa-item" onclick="navigate('planejamento')">
+          <span class="qa-icon">📅</span>
+          Planejamento
+        </a>
+        <a class="qa-item" onclick="navigate('estoque')">
+          <span class="qa-icon">⭕</span>
+          Estoque
+        </a>
+      </div>
+
+      <div id="alerts-section" style="margin-top:2rem">
+        <div class="section-header"><span class="section-title">Alertas</span></div>
+        <div class="alerts-container" id="alerts-list">
+          <div class="alert-item">
+            <div class="alert-title">log_012_20260319.txt</div>
+            <div class="alert-detail">Log suspeito — MQ-A • 19/03/2026</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Coluna Direita: Atividade Recente -->
+    <div>
+      <div class="section-header"><span class="section-title">Atividade Recente</span></div>
+      <div class="table-card">
+        <table class="activity-table">
+          <thead>
+            <tr>
+              <th>ROLO</th>
+              <th>TECIDO</th>
+              <th>STATUS</th>
+              <th>DATA</th>
+            </tr>
+          </thead>
+          <tbody id="recent-table">
+            <tr>
+              <td>ROLO-2025-0003</td>
+              <td>Tricoline</td>
+              <td><span class="badge badge-success">Fechado</span></td>
+              <td>13/03/2026</td>
+            </tr>
+            <tr>
+              <td>ROLO-2025-0002</td>
+              <td>Moletom 330g</td>
+              <td><span class="badge badge-success">Fechado</span></td>
+              <td>15/03/2026</td>
+            </tr>
+            <tr>
+              <td>ROLO-2025-0001</td>
+              <td>Oxford 300g</td>
+              <td><span class="badge badge-warning">Aberto</span></td>
+              <td>17/03/2026</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+/* Métricas Grid */
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+}
+
+.metric-card {
+  background: linear-gradient(135deg, #1e3a5f 0%, #0f2a3f 100%);
+  border: 1px solid #2a4a6f;
+  border-radius: 0.75rem;
+  padding: 1.5rem;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+}
+
+.metric-label {
+  font-size: 0.7rem;
+  font-weight: 700;
+  color: #888;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 0.75rem;
+}
+
+.metric-value {
+  font-size: 2.5rem;
+  font-weight: 700;
+  color: #fff;
+  margin-bottom: 0.5rem;
+  line-height: 1.2;
+}
+
+.metric-detail {
+  font-size: 0.85rem;
+  color: #aaa;
+}
+
+/* Home Grid (2 colunas) */
+.home-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2rem;
+  margin-bottom: 2rem;
+}
+
+@media (max-width: 1200px) {
+  .home-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Section Header */
+.section-header {
+  margin-bottom: 1rem;
+}
+
+.section-title {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #fff;
+}
+
+/* Quick Actions */
+.quick-actions {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1rem;
+}
+
+.qa-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  padding: 1.5rem 1rem;
+  background: linear-gradient(135deg, #1e3a5f 0%, #0f2a3f 100%);
+  border: 1px solid #2a4a6f;
+  border-radius: 0.75rem;
+  color: #fff;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  text-decoration: none;
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-align: center;
+}
+
+.qa-item:hover {
+  background: linear-gradient(135deg, #2a4a7f 0%, #1a3a5f 100%);
+  border-color: #3a5a8f;
+  transform: translateY(-2px);
+}
+
+.qa-icon {
+  font-size: 1.5rem;
+}
+
+/* Alerts */
+.alerts-container {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.alert-item {
+  background: linear-gradient(135deg, #4a3a1a 0%, #3a2a0a 100%);
+  border: 1px solid #6a5a2a;
+  border-left: 4px solid #ff9800;
+  border-radius: 0.5rem;
+  padding: 1rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+}
+
+.alert-item:hover {
+  background: linear-gradient(135deg, #5a4a2a 0%, #4a3a1a 100%);
+  border-color: #8a7a4a;
+}
+
+.alert-title {
+  font-weight: 600;
+  color: #fff;
+  margin-bottom: 0.25rem;
+}
+
+.alert-detail {
+  font-size: 0.85rem;
+  color: #aaa;
+}
+
+/* Table Card */
+.table-card {
+  background: linear-gradient(135deg, #1e3a5f 0%, #0f2a3f 100%);
+  border: 1px solid #2a4a6f;
+  border-radius: 0.75rem;
+  overflow: hidden;
+  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+}
+
+.activity-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.activity-table thead {
+  background: linear-gradient(135deg, #0f2a3f 0%, #0a1a2f 100%);
+  border-bottom: 2px solid #2a4a6f;
+}
+
+.activity-table th {
+  padding: 1rem;
+  text-align: left;
+  font-weight: 600;
+  color: #888;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.activity-table tbody tr {
+  border-bottom: 1px solid #1a3a5f;
+  transition: background 0.2s ease;
+}
+
+.activity-table tbody tr:hover {
+  background: linear-gradient(90deg, rgba(42, 74, 111, 0.3) 0%, transparent 100%);
+}
+
+.activity-table td {
+  padding: 1rem;
+  color: #ddd;
+  font-size: 0.9rem;
+}
+
+.activity-table tbody tr:last-child {
+  border-bottom: none;
+}
+
+/* Badges */
+.badge {
+  display: inline-block;
+  padding: 0.3rem 0.75rem;
+  border-radius: 0.25rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.badge-success {
+  background: #1a4d2e;
+  color: #4caf50;
+}
+
+.badge-warning {
+  background: #4a3a1a;
+  color: #ff9800;
+}
+</style>
+
+<script>
+async function loadHomeData() {
+  try {
+    const [jobsRes, rollsRes, suspectsRes] = await Promise.all([
+      fetch('/api/jobs?limit=1000').then(r => r.json()),
+      fetch('/api/rolls').then(r => r.json()),
+      fetch('/api/suspects').then(r => r.json())
+    ]);
+
+    const jobs = jobsRes || [];
+    const rolls = rollsRes || [];
+    const suspects = suspectsRes || [];
+
+    // Calculate metrics
+    const available = jobs.filter(j => !j.roll_id).length;
+    const openRolls = rolls.filter(r => r.status === 'open' || r.status === 'OPEN').length;
+    const suspectCount = suspects.length;
+    const lastClosed = rolls.filter(r => r.status === 'closed' || r.status === 'CLOSED')
+      .sort((a, b) => new Date(b.closed_at || b.created_at) - new Date(a.closed_at || a.created_at))[0];
+
+    // Update cards
+    document.getElementById('card-available').textContent = available;
+    document.getElementById('card-open').textContent = openRolls;
+    document.getElementById('card-suspects').textContent = suspectCount;
+    
+    if (lastClosed) {
+      document.getElementById('card-last').textContent = lastClosed.roll_name || 'ROLO-' + lastClosed.id;
+      document.getElementById('card-last-date').textContent = fmtDateShort(lastClosed.closed_at || lastClosed.created_at);
+    }
+
+    // Update alerts
+    if (suspectCount > 0) {
+      const alertsList = document.getElementById('alerts-list');
+      alertsList.innerHTML = suspects.slice(0, 3).map(s => `
+        <div class="alert-item">
+          <div class="alert-title">${s.job_id || 'Job #' + s.id}</div>
+          <div class="alert-detail">Log suspeito — ${s.machine || '?'} • ${fmtDateShort(s.start_time)}</div>
+        </div>
+      `).join('');
+    }
+
+    // Update recent rolls
+    const recentRolls = rolls.slice(-5).reverse();
+    const tbody = document.getElementById('recent-table');
+    if (recentRolls.length === 0) {
+      tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;padding:2rem;color:#888">Nenhum rolo registrado</td></tr>';
+    } else {
+      tbody.innerHTML = recentRolls.map(r => `
+        <tr style="cursor:pointer" onclick="navigate('rolos')">
+          <td style="font-weight:600">${r.roll_name || 'ROLO-' + r.id}</td>
+          <td>${r.fabric || '—'}</td>
+          <td>${r.status === 'closed' ? '<span class="badge badge-success">Fechado</span>' : '<span class="badge badge-warning">Aberto</span>'}</td>
+          <td style="color:#aaa;font-size:0.9rem">${fmtDateShort(r.closed_at || r.created_at)}</td>
+        </tr>
+      `).join('');
+    }
+  } catch (e) {
+    console.error('Erro ao carregar dados:', e);
+  }
+}
+
+// Load data on page load
+document.addEventListener('DOMContentLoaded', loadHomeData);
+</script>
+{% endblock %}

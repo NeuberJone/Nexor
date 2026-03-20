@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+
+{% block title %}Estoque — Nexor{% endblock %}
+{% block page_title %}Estoque{% endblock %}
+
+{% block content %}
+<div>
+  <div class="section-header">
+    <div>
+      <div class="section-title">Gestão de Estoque</div>
+      <div class="section-sub">Visualize e gerencie o estoque de tecidos</div>
+    </div>
+  </div>
+
+  <div class="card" style="padding:0;overflow:hidden">
+    <table>
+      <thead>
+        <tr>
+          <th>Tecido</th>
+          <th>Rolos</th>
+          <th>Metros</th>
+          <th>Reservado</th>
+          <th>Disponível</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr><td colspan="5"><div class="empty-state" style="padding:30px"><p>Nenhum estoque registrado</p></div></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}

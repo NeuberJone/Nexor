@@ -1,0 +1,592 @@
+{% extends "base.html" %}
+
+{% block page_title %}Sistema - Sincronização e Backup{% endblock %}
+
+{% block content %}
+<div class="page-container">
+    <div class="tabs">
+        <button class="tab-btn active" onclick="switchTab('sync')">
+            <span class="icon">🔄</span> Sincronização
+        </button>
+        <button class="tab-btn" onclick="switchTab('backup')">
+            <span class="icon">💾</span> Backup
+        </button>
+        <button class="tab-btn" onclick="switchTab('health')">
+            <span class="icon">❤️</span> Saúde do Sistema
+        </button>
+    </div>
+
+    <!-- Tab 1: Sincronização -->
+    <div id="sync" class="tab-content active">
+        <div class="section">
+            <h3>Sincronização com Backend Python</h3>
+            
+            <div class="summary-cards">
+                <div class="summary-card">
+                    <div class="label">Status</div>
+                    <div class="value" id="sync-status">Desconhecido</div>
+                </div>
+                <div class="summary-card">
+                    <div class="label">Última Sincronização</div>
+                    <div class="value" id="sync-last">Nunca</div>
+                </div>
+                <div class="summary-card">
+                    <div class="label">Backend</div>
+                    <div class="value" id="backend-url">-</div>
+                </div>
+            </div>
+
+            <div style="margin-top: 2rem;">
+                <h4>Ações de Sincronização</h4>
+                <div class="button-group">
+                    <button class="btn btn-primary" onclick="syncJobs()">
+                        <span class="icon">📥</span> Sincronizar Jobs
+                    </button>
+                    <button class="btn btn-primary" onclick="syncRolls()">
+                        <span class="icon">📤</span> Sincronizar Rolos
+                    </button>
+                    <button class="btn btn-success" onclick="fullSync()">
+                        <span class="icon">🔄</span> Sincronização Completa
+                    </button>
+                </div>
+            </div>
+
+            <div style="margin-top: 2rem;">
+                <h4>Log de Sincronização</h4>
+                <div class="log-container" id="sync-log">
+                    <p class="empty-state">Nenhuma sincronização realizada</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab 2: Backup -->
+    <div id="backup" class="tab-content">
+        <div class="section">
+            <h3>Gerenciamento de Backup</h3>
+            
+            <div class="summary-cards">
+                <div class="summary-card">
+                    <div class="label">Total de Backups</div>
+                    <div class="value" id="backup-count">0</div>
+                </div>
+                <div class="summary-card">
+                    <div class="label">Tamanho Total</div>
+                    <div class="value" id="backup-total-size">0 MB</div>
+                </div>
+                <div class="summary-card">
+                    <div class="label">Backup Mais Recente</div>
+                    <div class="value" id="backup-newest">-</div>
+                </div>
+            </div>
+
+            <div style="margin-top: 2rem;">
+                <h4>Ações de Backup</h4>
+                <div class="button-group">
+                    <button class="btn btn-primary" onclick="createBackup()">
+                        <span class="icon">💾</span> Criar Novo Backup
+                    </button>
+                    <button class="btn btn-warning" onclick="cleanupBackups()">
+                        <span class="icon">🗑️</span> Limpar Backups Antigos
+                    </button>
+                </div>
+            </div>
+
+            <div style="margin-top: 2rem;">
+                <h4>Backups Disponíveis</h4>
+                <div class="data-table-wrapper">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Nome</th>
+                                <th>Tamanho</th>
+                                <th>Data</th>
+                                <th>Ações</th>
+                            </tr>
+                        </thead>
+                        <tbody id="backups-tbody">
+                            <tr>
+                                <td colspan="4" class="empty-state">Carregando...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab 3: Saúde do Sistema -->
+    <div id="health" class="tab-content">
+        <div class="section">
+            <h3>Saúde do Sistema</h3>
+            
+            <div style="margin-top: 2rem;">
+                <h4>Status do Backend Python</h4>
+                <div class="status-card" id="backend-status">
+                    <div class="status-indicator" id="backend-indicator"></div>
+                    <div class="status-info">
+                        <div class="status-title">Verificando...</div>
+                        <div class="status-detail">Aguarde...</div>
+                    </div>
+                </div>
+            </div>
+
+            <div style="margin-top: 2rem;">
+                <h4>Estatísticas do Sistema</h4>
+                <div class="summary-cards">
+                    <div class="summary-card">
+                        <div class="label">Total de Jobs</div>
+                        <div class="value" id="stat-jobs">0</div>
+                    </div>
+                    <div class="summary-card">
+                        <div class="label">Total de Rolos</div>
+                        <div class="value" id="stat-rolls">0</div>
+                    </div>
+                    <div class="summary-card">
+                        <div class="label">Máquinas Cadastradas</div>
+                        <div class="value" id="stat-machines">0</div>
+                    </div>
+                    <div class="summary-card">
+                        <div class="label">Tecidos Cadastrados</div>
+                        <div class="value" id="stat-fabrics">0</div>
+                    </div>
+                </div>
+            </div>
+
+            <div style="margin-top: 2rem;">
+                <h4>Informações do Sistema</h4>
+                <div class="info-table">
+                    <div class="info-row">
+                        <div class="info-label">Versão do Nexor:</div>
+                        <div class="info-value">1.0.0</div>
+                    </div>
+                    <div class="info-row">
+                        <div class="info-label">Banco de Dados:</div>
+                        <div class="info-value">SQLite</div>
+                    </div>
+                    <div class="info-row">
+                        <div class="info-label">Framework:</div>
+                        <div class="info-value">Flask + Jinja2</div>
+                    </div>
+                    <div class="info-row">
+                        <div class="info-label">Última Atualização:</div>
+                        <div class="info-value" id="last-update">-</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// ============================================================
+// Sync Functions
+// ============================================================
+
+function loadSyncStatus() {
+    fetch('/api/sync/status')
+        .then(r => r.json())
+        .then(data => {
+            document.getElementById('sync-status').textContent = data.status || 'Desconhecido';
+            document.getElementById('sync-last').textContent = data.last_sync ? new Date(data.last_sync).toLocaleString() : 'Nunca';
+            document.getElementById('backend-url').textContent = data.backend_url;
+        })
+        .catch(err => console.error('Erro ao carregar status:', err));
+}
+
+function syncJobs() {
+    addLog('sync', '⏳ Sincronizando jobs...');
+    
+    fetch('/api/sync/jobs', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.ok) {
+                addLog('sync', `✅ ${data.inserted} jobs sincronizados`);
+            } else {
+                addLog('sync', `❌ Erro: ${data.error}`);
+            }
+            loadSyncStatus();
+        })
+        .catch(err => {
+            addLog('sync', `❌ Erro: ${err.message}`);
+        });
+}
+
+function syncRolls() {
+    addLog('sync', '⏳ Sincronizando rolos...');
+    
+    fetch('/api/sync/rolls', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.ok) {
+                addLog('sync', `✅ ${data.synced} rolos sincronizados`);
+            } else {
+                addLog('sync', `❌ Erro: ${data.error}`);
+            }
+            loadSyncStatus();
+        })
+        .catch(err => {
+            addLog('sync', `❌ Erro: ${err.message}`);
+        });
+}
+
+function fullSync() {
+    addLog('sync', '⏳ Sincronização completa iniciada...');
+    
+    fetch('/api/sync/full', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.ok) {
+                addLog('sync', `✅ Sincronização completa realizada`);
+            } else {
+                addLog('sync', `❌ Erro: ${data.error}`);
+            }
+            loadSyncStatus();
+        })
+        .catch(err => {
+            addLog('sync', `❌ Erro: ${err.message}`);
+        });
+}
+
+// ============================================================
+// Backup Functions
+// ============================================================
+
+function loadBackupStats() {
+    fetch('/api/backup/stats')
+        .then(r => r.json())
+        .then(data => {
+            if (data.ok) {
+                document.getElementById('backup-count').textContent = data.total_backups;
+                document.getElementById('backup-total-size').textContent = `${data.total_size_mb} MB`;
+                document.getElementById('backup-newest').textContent = data.newest_backup ? new Date(data.newest_backup).toLocaleString() : '-';
+            }
+        })
+        .catch(err => console.error('Erro ao carregar stats:', err));
+}
+
+function loadBackupList() {
+    fetch('/api/backup/list')
+        .then(r => r.json())
+        .then(data => {
+            if (data.ok) {
+                let html = '';
+                data.backups.forEach(backup => {
+                    const date = new Date(backup.modified).toLocaleString();
+                    html += `
+                        <tr>
+                            <td>${backup.name}</td>
+                            <td>${backup.size_mb} MB</td>
+                            <td>${date}</td>
+                            <td>
+                                <button class="btn btn-small" onclick="restoreBackup('${backup.name}')">Restaurar</button>
+                                <button class="btn btn-small btn-danger" onclick="deleteBackup('${backup.name}')">Deletar</button>
+                            </td>
+                        </tr>
+                    `;
+                });
+                document.getElementById('backups-tbody').innerHTML = html || '<tr><td colspan="4" class="empty-state">Nenhum backup</td></tr>';
+            }
+        })
+        .catch(err => console.error('Erro ao carregar backups:', err));
+}
+
+function createBackup() {
+    addLog('sync', '⏳ Criando backup...');
+    
+    fetch('/api/backup/create', { method: 'POST' })
+        .then(r => r.json())
+        .then(data => {
+            if (data.ok) {
+                addLog('sync', `✅ Backup criado: ${data.backup_name}`);
+                loadBackupStats();
+                loadBackupList();
+            } else {
+                addLog('sync', `❌ Erro: ${data.error}`);
+            }
+        })
+        .catch(err => {
+            addLog('sync', `❌ Erro: ${err.message}`);
+        });
+}
+
+function restoreBackup(backupName) {
+    if (!confirm(`Restaurar backup: ${backupName}?`)) return;
+    
+    addLog('sync', `⏳ Restaurando ${backupName}...`);
+    
+    fetch('/api/backup/restore', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ backup_name: backupName })
+    })
+        .then(r => r.json())
+        .then(data => {
+            if (data.ok) {
+                addLog('sync', `✅ Backup restaurado: ${backupName}`);
+                loadBackupList();
+            } else {
+                addLog('sync', `❌ Erro: ${data.error}`);
+            }
+        })
+        .catch(err => {
+            addLog('sync', `❌ Erro: ${err.message}`);
+        });
+}
+
+function deleteBackup(backupName) {
+    if (!confirm(`Deletar backup: ${backupName}?`)) return;
+    
+    addLog('sync', `⏳ Deletando ${backupName}...`);
+    
+    fetch('/api/backup/delete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ backup_name: backupName })
+    })
+        .then(r => r.json())
+        .then(data => {
+            if (data.ok) {
+                addLog('sync', `✅ Backup deletado: ${backupName}`);
+                loadBackupStats();
+                loadBackupList();
+            } else {
+                addLog('sync', `❌ Erro: ${data.error}`);
+            }
+        })
+        .catch(err => {
+            addLog('sync', `❌ Erro: ${err.message}`);
+        });
+}
+
+function cleanupBackups() {
+    if (!confirm('Deletar backups antigos (mantendo os 10 mais recentes)?')) return;
+    
+    addLog('sync', '⏳ Limpando backups antigos...');
+    
+    fetch('/api/backup/cleanup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ keep_count: 10 })
+    })
+        .then(r => r.json())
+        .then(data => {
+            if (data.ok) {
+                addLog('sync', `✅ ${data.deleted} backups deletados`);
+                loadBackupStats();
+                loadBackupList();
+            } else {
+                addLog('sync', `❌ Erro: ${data.error}`);
+            }
+        })
+        .catch(err => {
+            addLog('sync', `❌ Erro: ${err.message}`);
+        });
+}
+
+// ============================================================
+// Health Functions
+// ============================================================
+
+function loadHealthStatus() {
+    fetch('/api/sync/health')
+        .then(r => r.json())
+        .then(data => {
+            const indicator = document.getElementById('backend-indicator');
+            const title = document.querySelector('.status-title');
+            const detail = document.querySelector('.status-detail');
+            
+            if (data.ok && data.status === 'online') {
+                indicator.className = 'status-indicator online';
+                title.textContent = '✅ Backend Online';
+                detail.textContent = 'Conectado e operacional';
+            } else {
+                indicator.className = 'status-indicator offline';
+                title.textContent = '❌ Backend Offline';
+                detail.textContent = data.error || 'Desconectado';
+            }
+        })
+        .catch(err => {
+            const indicator = document.getElementById('backend-indicator');
+            indicator.className = 'status-indicator offline';
+            document.querySelector('.status-title').textContent = '❌ Erro';
+            document.querySelector('.status-detail').textContent = err.message;
+        });
+}
+
+function loadSystemStats() {
+    fetch('/api/status')
+        .then(r => r.json())
+        .then(data => {
+            if (data.ok && data.stats) {
+                const stats = data.stats;
+                document.getElementById('stat-jobs').textContent = stats.total_jobs || 0;
+                document.getElementById('stat-rolls').textContent = stats.total_rolls || 0;
+                document.getElementById('stat-machines').textContent = stats.total_machines || 0;
+                document.getElementById('stat-fabrics').textContent = stats.total_fabrics || 0;
+                document.getElementById('last-update').textContent = new Date().toLocaleString();
+            }
+        })
+        .catch(err => console.error('Erro ao carregar stats:', err));
+}
+
+// ============================================================
+// Utilities
+// ============================================================
+
+function addLog(type, message) {
+    const logContainer = document.getElementById(`${type}-log`);
+    const timestamp = new Date().toLocaleTimeString();
+    const logEntry = document.createElement('div');
+    logEntry.className = 'log-entry';
+    logEntry.textContent = `[${timestamp}] ${message}`;
+    logContainer.appendChild(logEntry);
+    logContainer.scrollTop = logContainer.scrollHeight;
+}
+
+function switchTab(tabName) {
+    document.querySelectorAll('.tab-content').forEach(tab => {
+        tab.classList.remove('active');
+    });
+    
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    
+    document.getElementById(tabName).classList.add('active');
+    event.target.classList.add('active');
+}
+
+// ============================================================
+// Init
+// ============================================================
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadSyncStatus();
+    loadBackupStats();
+    loadBackupList();
+    loadHealthStatus();
+    loadSystemStats();
+    
+    // Atualizar status a cada 30 segundos
+    setInterval(() => {
+        loadSyncStatus();
+        loadHealthStatus();
+        loadSystemStats();
+    }, 30000);
+});
+</script>
+
+<style>
+.button-group {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin-bottom: 2rem;
+}
+
+.log-container {
+    background: #1a1a1a;
+    border: 1px solid #333;
+    border-radius: 0.5rem;
+    padding: 1rem;
+    height: 200px;
+    overflow-y: auto;
+    font-family: monospace;
+    font-size: 0.9rem;
+}
+
+.log-entry {
+    color: #4CAF50;
+    margin-bottom: 0.5rem;
+    word-break: break-all;
+}
+
+.status-card {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    padding: 1.5rem;
+    background: white;
+    border-radius: 0.5rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.status-indicator {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    animation: pulse 2s infinite;
+}
+
+.status-indicator.online {
+    background: #4CAF50;
+}
+
+.status-indicator.offline {
+    background: #f44336;
+}
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.status-info {
+    flex: 1;
+}
+
+.status-title {
+    font-weight: bold;
+    font-size: 1.1rem;
+    margin-bottom: 0.25rem;
+}
+
+.status-detail {
+    color: #666;
+    font-size: 0.9rem;
+}
+
+.info-table {
+    background: white;
+    border-radius: 0.5rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    overflow: hidden;
+}
+
+.info-row {
+    display: flex;
+    padding: 1rem;
+    border-bottom: 1px solid #eee;
+}
+
+.info-row:last-child {
+    border-bottom: none;
+}
+
+.info-label {
+    font-weight: bold;
+    width: 200px;
+    color: #333;
+}
+
+.info-value {
+    flex: 1;
+    color: #666;
+}
+
+.btn-small {
+    padding: 0.4rem 0.8rem;
+    font-size: 0.85rem;
+}
+
+.btn-danger {
+    background: #f44336;
+    color: white;
+}
+
+.btn-danger:hover {
+    background: #d32f2f;
+}
+</style>
+{% endblock %}

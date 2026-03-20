@@ -1,0 +1,228 @@
+{% extends "base.html" %}
+
+{% block title %}Operação — Nexor{% endblock %}
+{% block page_title %}Operação{% endblock %}
+
+{% block content %}
+<div style="display:grid;grid-template-columns:1fr 300px;gap:20px;align-items:start">
+  <div>
+    <div class="section-header">
+      <div>
+        <div class="section-title">Inbox de Logs</div>
+        <div class="section-sub"><span id="logs-count">0</span> logs disponíveis para seleção</div>
+      </div>
+      <div class="flex gap-8">
+        <button class="btn-secondary btn-sm" onclick="selectAllLogs()">Selecionar Todos</button>
+        <button class="btn-secondary btn-sm" onclick="clearLogs()">Limpar</button>
+      </div>
+    </div>
+
+    <div class="filter-bar">
+      <div class="search-bar" style="flex:1">
+        <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" placeholder="Buscar log..." oninput="filterLogList(this.value)" />
+      </div>
+      <select onchange="filterLogStatus(this.value)">
+        <option value="">Todos os status</option>
+        <option value="ok">OK</option>
+        <option value="suspicious">Suspeito</option>
+      </select>
+    </div>
+
+    <div class="log-list" id="log-list">
+      <div class="empty-state">
+        <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        <p>Carregando logs...</p>
+      </div>
+    </div>
+  </div>
+
+  <div id="op-summary-panel">
+    <div class="card">
+      <div class="card-title">Resumo da Seleção</div>
+      <div style="margin-top:16px">
+        <div class="flex justify-between items-center" style="margin-bottom:12px">
+          <span class="text-muted">Logs selecionados:</span>
+          <span class="fw-600" id="summary-count">0</span>
+        </div>
+        <div class="flex justify-between items-center" style="margin-bottom:12px">
+          <span class="text-muted">Total (m):</span>
+          <span class="fw-600" id="summary-meters">0</span>
+        </div>
+        <div class="flex justify-between items-center" style="margin-bottom:12px">
+          <span class="text-muted">Total jobs:</span>
+          <span class="fw-600" id="summary-jobs">0</span>
+        </div>
+        <div class="flex justify-between items-center" style="margin-bottom:16px;padding-top:12px;border-top:1px solid var(--border)">
+          <span class="text-muted">Suspeitos:</span>
+          <span class="fw-600 color-yellow" id="summary-suspects">0</span>
+        </div>
+        <button class="btn-primary" style="width:100%" onclick="createRollFromSelection()" id="btn-create-roll" disabled>
+          Criar Rolo
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+let selectedLogs = new Set();
+let allLogs = [];
+
+async function loadLogs() {
+  try {
+    const data = await fetch('/api/jobs?limit=1000').then(r => r.json());
+    allLogs = (data || []).filter(j => !j.roll_id);
+    renderLogList(allLogs);
+    updateSummary();
+  } catch (e) {
+    console.error('Erro ao carregar logs:', e);
+    toast('Erro ao carregar logs', 'error');
+  }
+}
+
+function renderLogList(logs) {
+  const logList = document.getElementById('log-list');
+  document.getElementById('logs-count').textContent = logs.length;
+  
+  if (logs.length === 0) {
+    logList.innerHTML = `
+      <div class="empty-state">
+        <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+        <p>Nenhum log disponível</p>
+      </div>
+    `;
+    return;
+  }
+
+  logList.innerHTML = logs.map(log => renderLogItem(log)).join('');
+}
+
+function renderLogItem(log) {
+  const sel = selectedLogs.has(log.id);
+  const isSuspicious = log.suspicion_category ? true : false;
+  const fabric = log.fabric || 'Desconhecido';
+  const machine = log.machine || 'Desconhecido';
+  const operator = log.operator_name || log.operator_code || '—';
+  const meters = Math.round((log.effective_printed_length_m || log.planned_length_m || 0) * 1000) / 1000;
+  
+  return `
+    <div class="log-item ${sel ? 'selected' : ''} ${isSuspicious ? 'suspicious' : ''}" 
+         id="log-item-${log.id}" onclick="toggleLog(${log.id})">
+      <input class="log-check" type="checkbox" ${sel ? 'checked' : ''} onclick="event.stopPropagation();toggleLog(${log.id})" />
+      <div style="flex:1">
+        <div class="flex items-center gap-8 log-name">
+          ${log.job_id || 'Job #' + log.id}
+          ${isSuspicious ? '<span class="badge badge-yellow">Suspeito</span>' : ''}
+        </div>
+        <div class="log-details mt-8">
+          <span>🧵 ${fabric}</span>
+          <span>⚙️ ${machine}</span>
+          <span>👤 ${operator}</span>
+          <span>📏 ${meters}m</span>
+          <span>📋 1 job</span>
+          <span>📅 ${fmtDateShort(log.start_time)}</span>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function toggleLog(id) {
+  if (selectedLogs.has(id)) {
+    selectedLogs.delete(id);
+  } else {
+    selectedLogs.add(id);
+  }
+  const log = allLogs.find(l => l.id === id);
+  if (log) {
+    const el = document.getElementById('log-item-' + id);
+    if (el) el.outerHTML = renderLogItem(log);
+  }
+  updateSummary();
+}
+
+function selectAllLogs() {
+  allLogs.forEach(l => selectedLogs.add(l.id));
+  renderLogList(allLogs);
+  updateSummary();
+}
+
+function clearLogs() {
+  selectedLogs.clear();
+  renderLogList(allLogs);
+  updateSummary();
+}
+
+function filterLogList(q) {
+  const filtered = allLogs.filter(l => {
+    const jobId = (l.job_id || '').toLowerCase();
+    const fabric = (l.fabric || '').toLowerCase();
+    const machine = (l.machine || '').toLowerCase();
+    return jobId.includes(q.toLowerCase()) || fabric.includes(q.toLowerCase()) || machine.includes(q.toLowerCase());
+  });
+  renderLogList(filtered);
+}
+
+function filterLogStatus(status) {
+  let filtered = allLogs;
+  if (status === 'ok') {
+    filtered = allLogs.filter(l => !l.suspicion_category);
+  } else if (status === 'suspicious') {
+    filtered = allLogs.filter(l => l.suspicion_category);
+  }
+  renderLogList(filtered);
+}
+
+function updateSummary() {
+  const selected = allLogs.filter(l => selectedLogs.has(l.id));
+  const totalMeters = selected.reduce((sum, l) => sum + (l.effective_printed_length_m || l.planned_length_m || 0), 0);
+  const totalJobs = selected.length;
+  const suspectCount = selected.filter(l => l.suspicion_category).length;
+
+  document.getElementById('summary-count').textContent = selected.length;
+  document.getElementById('summary-meters').textContent = Math.round(totalMeters * 100) / 100;
+  document.getElementById('summary-jobs').textContent = totalJobs;
+  document.getElementById('summary-suspects').textContent = suspectCount;
+  
+  const btn = document.getElementById('btn-create-roll');
+  btn.disabled = selected.length === 0;
+}
+
+async function createRollFromSelection() {
+  if (selectedLogs.size === 0) {
+    toast('Selecione pelo menos um log', 'error');
+    return;
+  }
+
+  const jobIds = Array.from(selectedLogs);
+  const machine = prompt('Máquina (opcional):', '');
+  const fabric = prompt('Tecido (opcional):', '');
+  const note = prompt('Observações (opcional):', '');
+
+  try {
+    const response = await fetch('/api/rolls', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ machine, fabric, note, job_ids: jobIds })
+    });
+    const result = await response.json();
+    
+    if (result.ok || result.id) {
+      toast('Rolo criado com sucesso!', 'success');
+      selectedLogs.clear();
+      await loadLogs();
+      navigate('rolos');
+    } else {
+      toast('Erro ao criar rolo: ' + (result.error || 'desconhecido'), 'error');
+    }
+  } catch (e) {
+    console.error('Erro:', e);
+    toast('Erro ao criar rolo', 'error');
+  }
+}
+
+// Load logs on page load
+document.addEventListener('DOMContentLoaded', loadLogs);
+</script>
+{% endblock %}

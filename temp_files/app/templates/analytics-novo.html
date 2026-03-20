@@ -1,0 +1,632 @@
+{% extends "base.html" %}
+
+{% block page_title %}Analytics - Produção{% endblock %}
+
+{% block content %}
+<div class="page-container">
+    <div class="tabs">
+        <button class="tab-btn active" onclick="switchTab('overview')">
+            <span class="icon">📊</span> Visão Geral
+        </button>
+        <button class="tab-btn" onclick="switchTab('machines')">
+            <span class="icon">⚙️</span> Máquinas
+        </button>
+        <button class="tab-btn" onclick="switchTab('fabrics')">
+            <span class="icon">🧵</span> Tecidos
+        </button>
+        <button class="tab-btn" onclick="switchTab('daily')">
+            <span class="icon">📈</span> Produção Diária
+        </button>
+        <button class="tab-btn" onclick="switchTab('efficiency')">
+            <span class="icon">⚡</span> Eficiência
+        </button>
+        <button class="tab-btn" onclick="switchTab('comparison')">
+            <span class="icon">📊</span> Comparação
+        </button>
+    </div>
+
+    <!-- Filtros Globais -->
+    <div class="filter-group" style="margin-bottom: 2rem;">
+        <div class="filter-item">
+            <label>Data Inicial:</label>
+            <input type="date" id="filter-date-from" onchange="reloadAllCharts()">
+        </div>
+        <div class="filter-item">
+            <label>Data Final:</label>
+            <input type="date" id="filter-date-to" onchange="reloadAllCharts()">
+        </div>
+        <button class="btn btn-primary" onclick="reloadAllCharts()">Atualizar</button>
+    </div>
+
+    <!-- Tab 1: Visão Geral -->
+    <div id="overview" class="tab-content active">
+        <div class="section">
+            <h3>Resumo de Produção</h3>
+            
+            <div class="summary-cards">
+                <div class="summary-card">
+                    <div class="label">Total de Rolos</div>
+                    <div class="value" id="metric-total-rolls">0</div>
+                </div>
+                <div class="summary-card">
+                    <div class="label">Total de Metros</div>
+                    <div class="value" id="metric-total-meters">0 m</div>
+                </div>
+                <div class="summary-card">
+                    <div class="label">Total de Jobs</div>
+                    <div class="value" id="metric-total-jobs">0</div>
+                </div>
+                <div class="summary-card">
+                    <div class="label">Média por Rolo</div>
+                    <div class="value" id="metric-avg-roll">0 m</div>
+                </div>
+            </div>
+
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem; margin-top: 2rem;">
+                <div class="chart-container">
+                    <h4>Produção Diária (últimos 30 dias)</h4>
+                    <canvas id="chart-daily-line"></canvas>
+                </div>
+                <div class="chart-container">
+                    <h4>Distribuição de Status</h4>
+                    <canvas id="chart-status-pie"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab 2: Máquinas -->
+    <div id="machines" class="tab-content">
+        <div class="section">
+            <h3>Utilização de Máquinas</h3>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem;">
+                <div class="chart-container">
+                    <h4>Volume por Máquina</h4>
+                    <canvas id="chart-machines-bar"></canvas>
+                </div>
+                <div class="chart-container">
+                    <h4>Distribuição (%)</h4>
+                    <canvas id="chart-machines-pie"></canvas>
+                </div>
+            </div>
+
+            <div style="margin-top: 2rem;">
+                <h4>Detalhes por Máquina</h4>
+                <div class="data-table-wrapper">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Máquina</th>
+                                <th>Rolos</th>
+                                <th>Total (m)</th>
+                                <th>Percentual</th>
+                            </tr>
+                        </thead>
+                        <tbody id="machines-tbody">
+                            <tr>
+                                <td colspan="4" class="empty-state">Carregando...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab 3: Tecidos -->
+    <div id="fabrics" class="tab-content">
+        <div class="section">
+            <h3>Distribuição de Tecidos</h3>
+            
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 2rem;">
+                <div class="chart-container">
+                    <h4>Top 10 Tecidos</h4>
+                    <canvas id="chart-fabrics-bar"></canvas>
+                </div>
+                <div class="chart-container">
+                    <h4>Distribuição (%)</h4>
+                    <canvas id="chart-fabrics-pie"></canvas>
+                </div>
+            </div>
+
+            <div style="margin-top: 2rem;">
+                <h4>Detalhes por Tecido</h4>
+                <div class="data-table-wrapper">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Tecido</th>
+                                <th>Rolos</th>
+                                <th>Total (m)</th>
+                                <th>Percentual</th>
+                            </tr>
+                        </thead>
+                        <tbody id="fabrics-tbody">
+                            <tr>
+                                <td colspan="4" class="empty-state">Carregando...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab 4: Produção Diária -->
+    <div id="daily" class="tab-content">
+        <div class="section">
+            <h3>Produção Diária Detalhada</h3>
+            
+            <div class="chart-container" style="height: 400px;">
+                <canvas id="chart-daily-detailed"></canvas>
+            </div>
+
+            <div style="margin-top: 2rem;">
+                <h4>Dados Diários</h4>
+                <div class="data-table-wrapper">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Data</th>
+                                <th>Rolos</th>
+                                <th>Metros</th>
+                            </tr>
+                        </thead>
+                        <tbody id="daily-tbody">
+                            <tr>
+                                <td colspan="3" class="empty-state">Carregando...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab 5: Eficiência -->
+    <div id="efficiency" class="tab-content">
+        <div class="section">
+            <h3>Métricas de Eficiência</h3>
+            
+            <div class="summary-cards">
+                <div class="summary-card">
+                    <div class="label">Média</div>
+                    <div class="value" id="eff-avg">0 m</div>
+                </div>
+                <div class="summary-card">
+                    <div class="label">Mínima</div>
+                    <div class="value" id="eff-min">0 m</div>
+                </div>
+                <div class="summary-card">
+                    <div class="label">Máxima</div>
+                    <div class="value" id="eff-max">0 m</div>
+                </div>
+                <div class="summary-card">
+                    <div class="label">Mediana</div>
+                    <div class="value" id="eff-median">0 m</div>
+                </div>
+            </div>
+
+            <div class="chart-container" style="margin-top: 2rem; height: 300px;">
+                <h4>Distribuição de Eficiência</h4>
+                <canvas id="chart-efficiency"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab 6: Comparação -->
+    <div id="comparison" class="tab-content">
+        <div class="section">
+            <h3>Comparação entre Períodos</h3>
+            
+            <div class="chart-container" style="height: 400px;">
+                <canvas id="chart-comparison"></canvas>
+            </div>
+
+            <div style="margin-top: 2rem;">
+                <h4>Dados por Período</h4>
+                <div class="data-table-wrapper">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Período</th>
+                                <th>Rolos</th>
+                                <th>Metros</th>
+                                <th>Jobs</th>
+                            </tr>
+                        </thead>
+                        <tbody id="comparison-tbody">
+                            <tr>
+                                <td colspan="4" class="empty-state">Carregando...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<script>
+let charts = {};
+
+// ============================================================
+// Load Data
+// ============================================================
+
+function getDateRange() {
+    const from = document.getElementById('filter-date-from').value;
+    const to = document.getElementById('filter-date-to').value;
+    
+    let params = '';
+    if (from) params += `date_from=${from}&`;
+    if (to) params += `date_to=${to}&`;
+    
+    return params.slice(0, -1);
+}
+
+function loadMetrics() {
+    const params = getDateRange();
+    fetch(`/api/analytics/metrics?${params}`)
+        .then(r => r.json())
+        .then(data => {
+            const m = data.metrics;
+            document.getElementById('metric-total-rolls').textContent = m.total_rolls;
+            document.getElementById('metric-total-meters').textContent = `${m.total_meters} m`;
+            document.getElementById('metric-total-jobs').textContent = m.total_jobs;
+            document.getElementById('metric-avg-roll').textContent = `${m.avg_roll_size} m`;
+        })
+        .catch(err => console.error('Erro ao carregar métricas:', err));
+}
+
+function loadMachines() {
+    const params = getDateRange();
+    fetch(`/api/analytics/machines?${params}`)
+        .then(r => r.json())
+        .then(data => {
+            const machines = data.utilization.machines;
+            
+            // Tabela
+            let html = '';
+            machines.forEach(m => {
+                html += `
+                    <tr>
+                        <td>${m.name}</td>
+                        <td>${m.rolls}</td>
+                        <td>${m.total_m.toFixed(2)}</td>
+                        <td>${m.percentage}%</td>
+                    </tr>
+                `;
+            });
+            document.getElementById('machines-tbody').innerHTML = html;
+            
+            // Gráficos
+            drawMachinesCharts(machines);
+        })
+        .catch(err => console.error('Erro ao carregar máquinas:', err));
+}
+
+function loadFabrics() {
+    const params = getDateRange();
+    fetch(`/api/analytics/fabrics?${params}`)
+        .then(r => r.json())
+        .then(data => {
+            const fabrics = data.distribution.fabrics;
+            
+            // Tabela
+            let html = '';
+            fabrics.forEach(f => {
+                html += `
+                    <tr>
+                        <td>${f.name}</td>
+                        <td>${f.rolls}</td>
+                        <td>${f.total_m.toFixed(2)}</td>
+                        <td>${f.percentage}%</td>
+                    </tr>
+                `;
+            });
+            document.getElementById('fabrics-tbody').innerHTML = html;
+            
+            // Gráficos
+            drawFabricsCharts(fabrics);
+        })
+        .catch(err => console.error('Erro ao carregar tecidos:', err));
+}
+
+function loadDaily() {
+    const params = getDateRange();
+    fetch(`/api/analytics/daily?${params}`)
+        .then(r => r.json())
+        .then(data => {
+            const daily = data.daily.data;
+            
+            // Tabela
+            let html = '';
+            daily.forEach(d => {
+                html += `
+                    <tr>
+                        <td>${d.date}</td>
+                        <td>${d.rolls}</td>
+                        <td>${d.meters}</td>
+                    </tr>
+                `;
+            });
+            document.getElementById('daily-tbody').innerHTML = html;
+            
+            // Gráficos
+            drawDailyCharts(daily);
+        })
+        .catch(err => console.error('Erro ao carregar produção diária:', err));
+}
+
+function loadEfficiency() {
+    const params = getDateRange();
+    fetch(`/api/analytics/efficiency?${params}`)
+        .then(r => r.json())
+        .then(data => {
+            const e = data.efficiency;
+            document.getElementById('eff-avg').textContent = `${e.avg_efficiency} m`;
+            document.getElementById('eff-min').textContent = `${e.min_efficiency} m`;
+            document.getElementById('eff-max').textContent = `${e.max_efficiency} m`;
+            document.getElementById('eff-median').textContent = `${e.median_efficiency} m`;
+        })
+        .catch(err => console.error('Erro ao carregar eficiência:', err));
+}
+
+function loadComparison() {
+    fetch('/api/analytics/comparison?periods=4')
+        .then(r => r.json())
+        .then(data => {
+            const comparison = data.comparison.comparison;
+            
+            // Tabela
+            let html = '';
+            comparison.forEach(c => {
+                html += `
+                    <tr>
+                        <td>${c.period}</td>
+                        <td>${c.rolls}</td>
+                        <td>${c.meters}</td>
+                        <td>${c.jobs}</td>
+                    </tr>
+                `;
+            });
+            document.getElementById('comparison-tbody').innerHTML = html;
+            
+            // Gráfico
+            drawComparisonChart(comparison);
+        })
+        .catch(err => console.error('Erro ao carregar comparação:', err));
+}
+
+// ============================================================
+// Chart Functions
+// ============================================================
+
+function drawMachinesCharts(machines) {
+    const labels = machines.map(m => m.name);
+    const data = machines.map(m => m.total_m);
+    const percentages = machines.map(m => m.percentage);
+    
+    // Bar chart
+    if (charts['machines-bar']) charts['machines-bar'].destroy();
+    const ctx1 = document.getElementById('chart-machines-bar').getContext('2d');
+    charts['machines-bar'] = new Chart(ctx1, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Metros Produzidos',
+                data: data,
+                backgroundColor: '#4CAF50',
+            }]
+        },
+        options: { responsive: true, maintainAspectRatio: false }
+    });
+    
+    // Pie chart
+    if (charts['machines-pie']) charts['machines-pie'].destroy();
+    const ctx2 = document.getElementById('chart-machines-pie').getContext('2d');
+    charts['machines-pie'] = new Chart(ctx2, {
+        type: 'doughnut',
+        data: {
+            labels: labels,
+            datasets: [{
+                data: percentages,
+                backgroundColor: ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF'],
+            }]
+        },
+        options: { responsive: true, maintainAspectRatio: false }
+    });
+}
+
+function drawFabricsCharts(fabrics) {
+    const labels = fabrics.map(f => f.name);
+    const data = fabrics.map(f => f.total_m);
+    const percentages = fabrics.map(f => f.percentage);
+    
+    // Bar chart
+    if (charts['fabrics-bar']) charts['fabrics-bar'].destroy();
+    const ctx1 = document.getElementById('chart-fabrics-bar').getContext('2d');
+    charts['fabrics-bar'] = new Chart(ctx1, {
+        type: 'horizontalBar',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Metros',
+                data: data,
+                backgroundColor: '#2196F3',
+            }]
+        },
+        options: { responsive: true, maintainAspectRatio: false, indexAxis: 'y' }
+    });
+    
+    // Pie chart
+    if (charts['fabrics-pie']) charts['fabrics-pie'].destroy();
+    const ctx2 = document.getElementById('chart-fabrics-pie').getContext('2d');
+    charts['fabrics-pie'] = new Chart(ctx2, {
+        type: 'pie',
+        data: {
+            labels: labels,
+            datasets: [{
+                data: percentages,
+                backgroundColor: ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40', '#FF6384'],
+            }]
+        },
+        options: { responsive: true, maintainAspectRatio: false }
+    });
+}
+
+function drawDailyCharts(daily) {
+    const dates = daily.map(d => d.date);
+    const meters = daily.map(d => d.meters);
+    const rolls = daily.map(d => d.rolls);
+    
+    if (charts['daily-line']) charts['daily-line'].destroy();
+    const ctx = document.getElementById('chart-daily-line').getContext('2d');
+    charts['daily-line'] = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: dates,
+            datasets: [{
+                label: 'Metros',
+                data: meters,
+                borderColor: '#4CAF50',
+                backgroundColor: 'rgba(76, 175, 80, 0.1)',
+                tension: 0.4,
+            }]
+        },
+        options: { responsive: true, maintainAspectRatio: false }
+    });
+    
+    if (charts['daily-detailed']) charts['daily-detailed'].destroy();
+    const ctx2 = document.getElementById('chart-daily-detailed').getContext('2d');
+    charts['daily-detailed'] = new Chart(ctx2, {
+        type: 'bar',
+        data: {
+            labels: dates,
+            datasets: [
+                {
+                    label: 'Metros',
+                    data: meters,
+                    backgroundColor: '#4CAF50',
+                    yAxisID: 'y',
+                },
+                {
+                    label: 'Rolos',
+                    data: rolls,
+                    backgroundColor: '#2196F3',
+                    yAxisID: 'y1',
+                }
+            ]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            scales: {
+                y: { type: 'linear', position: 'left' },
+                y1: { type: 'linear', position: 'right' }
+            }
+        }
+    });
+}
+
+function drawComparisonChart(comparison) {
+    const periods = comparison.map(c => c.period);
+    const meters = comparison.map(c => c.meters);
+    const rolls = comparison.map(c => c.rolls);
+    
+    if (charts['comparison']) charts['comparison'].destroy();
+    const ctx = document.getElementById('chart-comparison').getContext('2d');
+    charts['comparison'] = new Chart(ctx, {
+        type: 'bar',
+        data: {
+            labels: periods,
+            datasets: [
+                {
+                    label: 'Metros',
+                    data: meters,
+                    backgroundColor: '#4CAF50',
+                },
+                {
+                    label: 'Rolos',
+                    data: rolls,
+                    backgroundColor: '#2196F3',
+                }
+            ]
+        },
+        options: { responsive: true, maintainAspectRatio: false }
+    });
+}
+
+// ============================================================
+// Tabs
+// ============================================================
+
+function switchTab(tabName) {
+    document.querySelectorAll('.tab-content').forEach(tab => {
+        tab.classList.remove('active');
+    });
+    
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    
+    document.getElementById(tabName).classList.add('active');
+    event.target.classList.add('active');
+}
+
+// ============================================================
+// Reload
+// ============================================================
+
+function reloadAllCharts() {
+    loadMetrics();
+    loadMachines();
+    loadFabrics();
+    loadDaily();
+    loadEfficiency();
+    loadComparison();
+}
+
+// ============================================================
+// Init
+// ============================================================
+
+document.addEventListener('DOMContentLoaded', function() {
+    // Definir datas padrão (últimos 30 dias)
+    const today = new Date();
+    const thirtyDaysAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
+    
+    document.getElementById('filter-date-from').valueAsDate = thirtyDaysAgo;
+    document.getElementById('filter-date-to').valueAsDate = today;
+    
+    // Carregar dados
+    reloadAllCharts();
+});
+</script>
+
+<style>
+.chart-container {
+    background: white;
+    padding: 1.5rem;
+    border-radius: 0.5rem;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    position: relative;
+    height: 300px;
+}
+
+.chart-container h4 {
+    margin-top: 0;
+    margin-bottom: 1rem;
+    color: #333;
+}
+
+canvas {
+    max-height: 250px;
+}
+</style>
+{% endblock %}

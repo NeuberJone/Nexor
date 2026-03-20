@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>{% block title %}Nexor — Plataforma Operacional Têxtil{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}" />
+</head>
+<body>
+  <div id="app">
+    <!-- SIDEBAR -->
+    <aside id="sidebar">
+      <div class="sidebar-logo">
+        <span class="logo-icon">⬡</span>
+        <span class="logo-text">Nexor</span>
+      </div>
+      <nav class="sidebar-nav">
+        <a href="/" class="nav-item {% if request.endpoint == 'index' %}active{% endif %}" onclick="navigate('home'); return false;">
+          <svg viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+          <span>Home</span>
+        </a>
+        <a href="/operacao" class="nav-item {% if request.endpoint == 'operacao' %}active{% endif %}" onclick="navigate('operacao'); return false;">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M4.93 4.93a10 10 0 0 0 0 14.14"/></svg>
+          <span>Operação</span>
+        </a>
+        <a href="/rolos" class="nav-item {% if request.endpoint == 'rolos' %}active{% endif %}" onclick="navigate('rolos'); return false;">
+          <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          <span>Rolos</span>
+        </a>
+        <a href="/planejamento" class="nav-item {% if request.endpoint == 'planejamento' %}active{% endif %}" onclick="navigate('planejamento'); return false;">
+          <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          <span>Planejamento</span>
+        </a>
+        <a href="/estoque" class="nav-item {% if request.endpoint == 'estoque' %}active{% endif %}" onclick="navigate('estoque'); return false;">
+          <svg viewBox="0 0 24 24"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/></svg>
+          <span>Estoque</span>
+        </a>
+        <a href="/analytics" class="nav-item {% if request.endpoint == 'analytics' %}active{% endif %}" onclick="navigate('analytics'); return false;">
+          <svg viewBox="0 0 24 24"><line x1="12" y1="2" x2="12" y2="22"/><polyline points="4 12 12 4 20 12"/><polyline points="4 20 12 12 20 20"/></svg>
+          <span>Analytics</span>
+        </a>
+        <a href="/cadastros" class="nav-item {% if request.endpoint == 'cadastros' %}active{% endif %}" onclick="navigate('cadastros'); return false;">
+          <svg viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          <span>Cadastros</span>
+        </a>
+        <a href="/configuracoes" class="nav-item {% if request.endpoint == 'configuracoes' %}active{% endif %}" onclick="navigate('configuracoes'); return false;">
+          <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 4.93a10 10 0 0 0 0 14.14"/><path d="M12 1v2m0 18v2M4.22 4.22l1.42 1.42m12.72 12.72 1.42 1.42M1 12h2m18 0h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
+          <span>Configuracoes</span>
+        </a>
+        <a href="/sistema" class="nav-item {% if request.endpoint == 'sistema' %}active{% endif %}" onclick="navigate('sistema'); return false;">
+          <svg viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"/><line x1="8" y1="21" x2="16" y2="21"/><line x1="12" y1="17" x2="12" y2="21"/></svg>
+          <span>Sistema</span>
+        </a>
+        <a href="/auditoria" class="nav-item {% if request.endpoint == 'auditoria' %}active{% endif %}" onclick="navigate('auditoria'); return false;">
+          <svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+          <span>Auditoria</span>
+        </a>
+        <a href="/reexportacao" class="nav-item {% if request.endpoint == 'reexportacao' %}active{% endif %}" onclick="navigate('reexportacao'); return false;">
+          <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          <span>Reexportacao</span>
+        </a>
+        <a href="/revisao-inconsistencias" class="nav-item {% if request.endpoint == 'revisao_inconsistencias' %}active{% endif %}" onclick="navigate('revisao-inconsistencias'); return false;">
+          <svg viewBox="0 0 24 24"><path d="M12 9v2m0 4v2m-6-4h12a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2z"/><path d="M9 5a3 3 0 0 1 6 0"/></svg>
+          <span>Revisao</span>
+        </a>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="sys-status">
+          <span class="status-dot online" id="status-dot"></span>
+          <span id="status-text">Sistema ativo</span>
+        </div>
+      </div>
+    </aside>
+
+    <!-- MAIN CONTENT -->
+    <div id="main">
+      <!-- TOPBAR -->
+      <header id="topbar">
+        <div class="topbar-left">
+          <span id="page-title">{% block page_title %}Home{% endblock %}</span>
+          <span id="page-subtitle" class="subtitle"></span>
+        </div>
+        <div class="topbar-right">
+          <span id="clock"></span>
+          <button class="btn-primary" id="btn-novo-fechamento" onclick="navigate('operacao')">+ Novo Fechamento</button>
+        </div>
+      </header>
+
+      <!-- CONTENT -->
+      <main id="content">
+        {% block content %}{% endblock %}
+      </main>
+    </div>
+  </div>
+
+  <!-- MODAL -->
+  <div id="modal-overlay" class="hidden">
+    <div id="modal-box">
+      <div id="modal-header">
+        <span id="modal-title"></span>
+        <button onclick="closeModal()" class="modal-close">✕</button>
+      </div>
+      <div id="modal-body"></div>
+      <div id="modal-footer"></div>
+    </div>
+  </div>
+
+  <!-- TOAST -->
+  <div id="toast-container"></div>
+
+  <!-- SCRIPTS -->
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>
+
+<!-- Feedback System -->
+<script src="{{ url_for('static', filename='js/feedback.js') }}"></script>

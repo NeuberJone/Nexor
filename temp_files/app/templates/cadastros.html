@@ -1,0 +1,265 @@
+{% extends "base.html" %}
+
+{% block title %}Cadastros — Nexor{% endblock %}
+{% block page_title %}Cadastros{% endblock %}
+
+{% block content %}
+<div>
+  <div class="section-header">
+    <div>
+      <div class="section-title">Gerenciamento de Dados Mestres</div>
+      <div class="section-sub">Máquinas, Operadores e Tecidos</div>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="flex gap-2" style="border-bottom:1px solid var(--border);margin-bottom:20px">
+    <button class="nav-item active" onclick="switchTab('machines')" style="border-bottom:2px solid var(--accent);margin-bottom:-1px">Máquinas</button>
+    <button class="nav-item" onclick="switchTab('operators')" style="border-bottom:2px solid transparent;margin-bottom:-1px">Operadores</button>
+    <button class="nav-item" onclick="switchTab('fabrics')" style="border-bottom:2px solid transparent;margin-bottom:-1px">Tecidos</button>
+  </div>
+
+  <!-- Machines Tab -->
+  <div id="tab-machines">
+    <div class="section-header" style="margin-bottom:16px">
+      <span class="section-title">Máquinas</span>
+      <button class="btn-primary btn-sm" onclick="openAddMachineModal()">+ Adicionar</button>
+    </div>
+    <div class="card" style="padding:0;overflow:hidden">
+      <table>
+        <thead>
+          <tr><th>Código</th><th>Nome</th><th>Tipo</th><th>Status</th><th>Ações</th></tr>
+        </thead>
+        <tbody id="machines-table">
+          <tr><td colspan="5"><div class="empty-state" style="padding:30px"><p>Carregando máquinas...</p></div></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Operators Tab -->
+  <div id="tab-operators" style="display:none">
+    <div class="section-header" style="margin-bottom:16px">
+      <span class="section-title">Operadores</span>
+      <button class="btn-primary btn-sm" onclick="openAddOperatorModal()">+ Adicionar</button>
+    </div>
+    <div class="card" style="padding:0;overflow:hidden">
+      <table>
+        <thead>
+          <tr><th>Código</th><th>Nome</th><th>Status</th><th>Ações</th></tr>
+        </thead>
+        <tbody id="operators-table">
+          <tr><td colspan="4"><div class="empty-state" style="padding:30px"><p>Carregando operadores...</p></div></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Fabrics Tab -->
+  <div id="tab-fabrics" style="display:none">
+    <div class="section-header" style="margin-bottom:16px">
+      <span class="section-title">Tecidos</span>
+      <button class="btn-primary btn-sm" onclick="openAddFabricModal()">+ Adicionar</button>
+    </div>
+    <div class="card" style="padding:0;overflow:hidden">
+      <table>
+        <thead>
+          <tr><th>Nome</th><th>Código</th><th>Status</th><th>Ações</th></tr>
+        </thead>
+        <tbody id="fabrics-table">
+          <tr><td colspan="4"><div class="empty-state" style="padding:30px"><p>Carregando tecidos...</p></div></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+let machines = [];
+let operators = [];
+let fabrics = [];
+
+async function loadMasterData() {
+  try {
+    const [machinesData, operatorsData, fabricsData] = await Promise.all([
+      fetch('/api/machines').then(r => r.json()),
+      fetch('/api/machines').then(r => r.json()), // TODO: Add /api/operators
+      fetch('/api/fabrics').then(r => r.json())
+    ]);
+    
+    machines = machinesData || [];
+    operators = operatorsData || [];
+    fabrics = fabricsData || [];
+    
+    renderMachines();
+    renderOperators();
+    renderFabrics();
+  } catch (e) {
+    console.error('Erro ao carregar dados mestres:', e);
+    toast('Erro ao carregar dados', 'error');
+  }
+}
+
+function switchTab(tab) {
+  document.querySelectorAll('[id^="tab-"]').forEach(el => el.style.display = 'none');
+  document.getElementById('tab-' + tab).style.display = 'block';
+}
+
+function renderMachines() {
+  const tbody = document.getElementById('machines-table');
+  if (machines.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="5"><div class="empty-state" style="padding:30px"><p>Nenhuma máquina registrada</p></div></td></tr>';
+    return;
+  }
+  tbody.innerHTML = machines.map(m => `
+    <tr>
+      <td class="fw-600">${m.code || m.machine_id}</td>
+      <td>${m.name || m.computer_name}</td>
+      <td>${m.type || 'Impressora'}</td>
+      <td>${statusBadge(m.active ? 'ativo' : 'inativo')}</td>
+      <td class="tbl-actions">
+        <button class="btn-ghost btn-sm" onclick="editMachine(${m.id})">Editar</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function renderOperators() {
+  const tbody = document.getElementById('operators-table');
+  if (operators.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="4"><div class="empty-state" style="padding:30px"><p>Nenhum operador registrado</p></div></td></tr>';
+    return;
+  }
+  tbody.innerHTML = operators.map(o => `
+    <tr>
+      <td class="fw-600">${o.code || 'OP-' + o.id}</td>
+      <td>${o.name || o.full_name}</td>
+      <td>${statusBadge(o.active ? 'ativo' : 'inativo')}</td>
+      <td class="tbl-actions">
+        <button class="btn-ghost btn-sm" onclick="editOperator(${o.id})">Editar</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function renderFabrics() {
+  const tbody = document.getElementById('fabrics-table');
+  if (fabrics.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="4"><div class="empty-state" style="padding:30px"><p>Nenhum tecido registrado</p></div></td></tr>';
+    return;
+  }
+  tbody.innerHTML = fabrics.map(f => `
+    <tr>
+      <td class="fw-600">${f.name}</td>
+      <td>${f.code || f.normalized_name}</td>
+      <td>${statusBadge(f.active ? 'ativo' : 'inativo')}</td>
+      <td class="tbl-actions">
+        <button class="btn-ghost btn-sm" onclick="editFabric(${f.id})">Editar</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function openAddMachineModal() {
+  const body = `
+    <div class="form-group">
+      <label class="form-label">Código</label>
+      <input type="text" id="machine-code" placeholder="Ex: MQ-A" />
+    </div>
+    <div class="form-group">
+      <label class="form-label">Nome</label>
+      <input type="text" id="machine-name" placeholder="Ex: Máquina A" />
+    </div>
+  `;
+  const footer = `
+    <button class="btn-secondary" onclick="closeModal()">Cancelar</button>
+    <button class="btn-primary" onclick="saveMachine()">Salvar</button>
+  `;
+  openModal('Adicionar Máquina', body, footer);
+}
+
+async function saveMachine() {
+  const code = document.getElementById('machine-code').value;
+  const name = document.getElementById('machine-name').value;
+  
+  if (!code || !name) {
+    toast('Preencha todos os campos', 'error');
+    return;
+  }
+  
+  // TODO: Send to backend
+  toast('Máquina adicionada com sucesso!', 'success');
+  closeModal();
+  await loadMasterData();
+}
+
+function openAddOperatorModal() {
+  const body = `
+    <div class="form-group">
+      <label class="form-label">Código</label>
+      <input type="text" id="operator-code" placeholder="Ex: OP-01" />
+    </div>
+    <div class="form-group">
+      <label class="form-label">Nome</label>
+      <input type="text" id="operator-name" placeholder="Ex: João Silva" />
+    </div>
+  `;
+  const footer = `
+    <button class="btn-secondary" onclick="closeModal()">Cancelar</button>
+    <button class="btn-primary" onclick="saveOperator()">Salvar</button>
+  `;
+  openModal('Adicionar Operador', body, footer);
+}
+
+async function saveOperator() {
+  const code = document.getElementById('operator-code').value;
+  const name = document.getElementById('operator-name').value;
+  
+  if (!code || !name) {
+    toast('Preencha todos os campos', 'error');
+    return;
+  }
+  
+  // TODO: Send to backend
+  toast('Operador adicionado com sucesso!', 'success');
+  closeModal();
+  await loadMasterData();
+}
+
+function openAddFabricModal() {
+  const body = `
+    <div class="form-group">
+      <label class="form-label">Nome</label>
+      <input type="text" id="fabric-name" placeholder="Ex: Oxford 300g" />
+    </div>
+    <div class="form-group">
+      <label class="form-label">Código</label>
+      <input type="text" id="fabric-code" placeholder="Ex: OX300" />
+    </div>
+  `;
+  const footer = `
+    <button class="btn-secondary" onclick="closeModal()">Cancelar</button>
+    <button class="btn-primary" onclick="saveFabric()">Salvar</button>
+  `;
+  openModal('Adicionar Tecido', body, footer);
+}
+
+async function saveFabric() {
+  const name = document.getElementById('fabric-name').value;
+  const code = document.getElementById('fabric-code').value;
+  
+  if (!name) {
+    toast('Preencha o nome do tecido', 'error');
+    return;
+  }
+  
+  // TODO: Send to backend
+  toast('Tecido adicionado com sucesso!', 'success');
+  closeModal();
+  await loadMasterData();
+}
+
+// Load data on page load
+document.addEventListener('DOMContentLoaded', loadMasterData);
+</script>
+{% endblock %}

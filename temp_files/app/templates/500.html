@@ -1,0 +1,12 @@
+{% extends "base.html" %}
+
+{% block title %}Erro do Servidor — Nexor{% endblock %}
+
+{% block content %}
+<div class="empty-state" style="padding:60px">
+  <svg viewBox="0 0 24 24" style="width:80px;height:80px;color:var(--red)"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+  <h2 style="font-size:24px;font-weight:600;margin-top:16px;color:var(--red)">Erro do Servidor</h2>
+  <p style="margin-top:8px;color:var(--text3)">Ocorreu um erro ao processar sua requisição.</p>
+  <button class="btn-primary" style="margin-top:16px" onclick="navigate('home')">Voltar para Home</button>
+</div>
+{% endblock %}

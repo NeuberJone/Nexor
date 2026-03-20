@@ -1,0 +1,379 @@
+{% extends "base.html" %}
+
+{% block page_title %}Reexportação de Rolos{% endblock %}
+{% block page_action_btn %}Atualizar{% endblock %}
+
+{% block content %}
+<div class="page-container">
+    <div class="section">
+        <h3>Reexportar Rolos em PDF</h3>
+        <p class="section-description">
+            Selecione rolos já fechados e exporte seus dados em PDF (modo SUMMARY ou FULL).
+        </p>
+
+        <!-- Filtros -->
+        <div class="filter-group">
+            <div class="filter-item">
+                <label>Status:</label>
+                <select id="filter-status" onchange="applyFilters()">
+                    <option value="">Todos</option>
+                    <option value="open">Abertos</option>
+                    <option value="closed">Fechados</option>
+                </select>
+            </div>
+            <div class="filter-item">
+                <label>Máquina:</label>
+                <select id="filter-machine" onchange="applyFilters()">
+                    <option value="">Todas</option>
+                </select>
+            </div>
+            <div class="filter-item">
+                <label>Tecido:</label>
+                <select id="filter-fabric" onchange="applyFilters()">
+                    <option value="">Todos</option>
+                </select>
+            </div>
+            <div class="filter-item">
+                <label>Data De:</label>
+                <input type="date" id="filter-date-from" onchange="applyFilters()">
+            </div>
+            <div class="filter-item">
+                <label>Data Até:</label>
+                <input type="date" id="filter-date-to" onchange="applyFilters()">
+            </div>
+        </div>
+
+        <!-- Tabela de Rolos -->
+        <div class="data-table-wrapper">
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th><input type="checkbox" id="select-all" onchange="toggleSelectAll()"></th>
+                        <th>ID</th>
+                        <th>Nome</th>
+                        <th>Máquina</th>
+                        <th>Tecido</th>
+                        <th>Total (m)</th>
+                        <th>Jobs</th>
+                        <th>Status</th>
+                        <th>Data</th>
+                        <th>Ação</th>
+                    </tr>
+                </thead>
+                <tbody id="rolls-tbody">
+                    <tr>
+                        <td colspan="10" class="empty-state">Carregando...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Ações em Lote -->
+        <div class="action-bar" id="action-bar" style="display: none;">
+            <span id="selected-count">0 selecionados</span>
+            <button class="btn btn-primary" onclick="exportSelectedPDF('summary')">
+                📄 Exportar SUMMARY
+            </button>
+            <button class="btn btn-primary" onclick="exportSelectedPDF('full')">
+                📋 Exportar FULL
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Progresso de Exportação -->
+<div id="export-modal" class="modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h3>Exportando PDFs...</h3>
+        </div>
+        <div class="modal-body">
+            <div class="progress-bar">
+                <div id="progress-fill" class="progress-fill"></div>
+            </div>
+            <p id="progress-text" style="text-align: center; margin-top: 1rem;">0%</p>
+            <div id="export-results" style="margin-top: 1rem; max-height: 300px; overflow-y: auto;"></div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal('export-modal')" id="close-export-btn" style="display: none;">
+                Fechar
+            </button>
+        </div>
+    </div>
+</div>
+
+<script>
+// ============================================================
+// Data Loading
+// ============================================================
+
+function loadRolls() {
+    const status = document.getElementById('filter-status').value;
+    const machine = document.getElementById('filter-machine').value;
+    const fabric = document.getElementById('filter-fabric').value;
+    const dateFrom = document.getElementById('filter-date-from').value;
+    const dateTo = document.getElementById('filter-date-to').value;
+
+    let url = '/api/rolls?limit=500';
+    if (status) url += `&status=${status}`;
+    if (machine) url += `&machine=${machine}`;
+    if (fabric) url += `&fabric=${fabric}`;
+    if (dateFrom) url += `&date_from=${dateFrom}`;
+    if (dateTo) url += `&date_to=${dateTo}`;
+
+    fetch(url)
+        .then(r => r.json())
+        .then(rolls => {
+            const tbody = document.getElementById('rolls-tbody');
+
+            if (rolls.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="10" class="empty-state">Nenhum rolo encontrado</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = rolls.map(roll => `
+                <tr>
+                    <td><input type="checkbox" class="roll-checkbox" value="${roll.id}"></td>
+                    <td>${roll.id}</td>
+                    <td>${roll.roll_name}</td>
+                    <td>${roll.machine}</td>
+                    <td>${roll.fabric}</td>
+                    <td>${roll.total_m}</td>
+                    <td>${roll.job_count}</td>
+                    <td><span class="badge badge-${roll.status}">${roll.status}</span></td>
+                    <td>${new Date(roll.created_at).toLocaleDateString('pt-BR')}</td>
+                    <td>
+                        <button class="btn btn-sm btn-primary" onclick="exportSinglePDF(${roll.id}, 'summary')">
+                            Summary
+                        </button>
+                        <button class="btn btn-sm btn-primary" onclick="exportSinglePDF(${roll.id}, 'full')">
+                            Full
+                        </button>
+                    </td>
+                </tr>
+            `).join('');
+
+            updateActionBar();
+        })
+        .catch(err => {
+            console.error('Erro ao carregar rolos:', err);
+            document.getElementById('rolls-tbody').innerHTML = 
+                '<tr><td colspan="10" class="empty-state">Erro ao carregar dados</td></tr>';
+        });
+}
+
+function loadMachines() {
+    fetch('/api/machines')
+        .then(r => r.json())
+        .then(machines => {
+            const select = document.getElementById('filter-machine');
+            machines.forEach(m => {
+                const option = document.createElement('option');
+                option.value = m.code;
+                option.textContent = m.name;
+                select.appendChild(option);
+            });
+        });
+}
+
+function loadFabrics() {
+    fetch('/api/fabrics')
+        .then(r => r.json())
+        .then(fabrics => {
+            const select = document.getElementById('filter-fabric');
+            fabrics.forEach(f => {
+                const option = document.createElement('option');
+                option.value = f.name;
+                option.textContent = f.name;
+                select.appendChild(option);
+            });
+        });
+}
+
+// ============================================================
+// Filters
+// ============================================================
+
+function applyFilters() {
+    loadRolls();
+}
+
+// ============================================================
+// Selection
+// ============================================================
+
+function toggleSelectAll() {
+    const isChecked = document.getElementById('select-all').checked;
+    document.querySelectorAll('.roll-checkbox').forEach(cb => {
+        cb.checked = isChecked;
+    });
+    updateActionBar();
+}
+
+function updateActionBar() {
+    const selected = document.querySelectorAll('.roll-checkbox:checked').length;
+    const actionBar = document.getElementById('action-bar');
+
+    if (selected > 0) {
+        actionBar.style.display = 'flex';
+        document.getElementById('selected-count').textContent = `${selected} selecionado(s)`;
+    } else {
+        actionBar.style.display = 'none';
+    }
+}
+
+document.addEventListener('change', function(e) {
+    if (e.target.classList.contains('roll-checkbox')) {
+        updateActionBar();
+    }
+});
+
+// ============================================================
+// Export
+// ============================================================
+
+function exportSinglePDF(rollId, mode) {
+    exportRollsPDF([rollId], mode);
+}
+
+function exportSelectedPDF(mode) {
+    const selected = Array.from(document.querySelectorAll('.roll-checkbox:checked'))
+        .map(cb => parseInt(cb.value));
+
+    if (selected.length === 0) {
+        alert('Selecione pelo menos um rolo');
+        return;
+    }
+
+    exportRollsPDF(selected, mode);
+}
+
+function exportRollsPDF(rollIds, mode) {
+    const modal = document.getElementById('export-modal');
+    const resultsDiv = document.getElementById('export-results');
+    const progressFill = document.getElementById('progress-fill');
+    const progressText = document.getElementById('progress-text');
+    const closeBtn = document.getElementById('close-export-btn');
+
+    openModal('export-modal');
+    resultsDiv.innerHTML = '';
+    closeBtn.style.display = 'none';
+
+    let completed = 0;
+    const results = [];
+
+    rollIds.forEach((rollId, index) => {
+        fetch(`/api/rolls/${rollId}/export-pdf?mode=${mode}`)
+            .then(r => r.json())
+            .then(data => {
+                completed++;
+                const percent = Math.round((completed / rollIds.length) * 100);
+                progressFill.style.width = percent + '%';
+                progressText.textContent = percent + '%';
+
+                if (data.ok) {
+                    results.push(`✓ Rolo ${data.roll_id}: ${data.file}`);
+                } else {
+                    results.push(`✗ Rolo ${rollId}: ${data.error}`);
+                }
+
+                resultsDiv.innerHTML = results.map(r => `<p>${r}</p>`).join('');
+
+                if (completed === rollIds.length) {
+                    closeBtn.style.display = 'block';
+                }
+            })
+            .catch(err => {
+                completed++;
+                const percent = Math.round((completed / rollIds.length) * 100);
+                progressFill.style.width = percent + '%';
+                progressText.textContent = percent + '%';
+
+                results.push(`✗ Rolo ${rollId}: Erro na requisição`);
+                resultsDiv.innerHTML = results.map(r => `<p>${r}</p>`).join('');
+
+                if (completed === rollIds.length) {
+                    closeBtn.style.display = 'block';
+                }
+            });
+    });
+}
+
+// ============================================================
+// Modal
+// ============================================================
+
+function openModal(modalId) {
+    document.getElementById(modalId).style.display = 'flex';
+}
+
+function closeModal(modalId) {
+    document.getElementById(modalId).style.display = 'none';
+}
+
+window.onclick = function(event) {
+    if (event.target.classList.contains('modal')) {
+        event.target.style.display = 'none';
+    }
+}
+
+// ============================================================
+// Init
+// ============================================================
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadRolls();
+    loadMachines();
+    loadFabrics();
+});
+</script>
+
+<style>
+.action-bar {
+    display: flex;
+    gap: 1rem;
+    align-items: center;
+    padding: 1rem;
+    background-color: #f8f9fa;
+    border-radius: 0.5rem;
+    margin-top: 1rem;
+    border-left: 4px solid #007bff;
+}
+
+.action-bar span {
+    font-weight: bold;
+    color: #495057;
+}
+
+.progress-bar {
+    width: 100%;
+    height: 24px;
+    background-color: #e9ecef;
+    border-radius: 0.25rem;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background-color: #28a745;
+    width: 0%;
+    transition: width 0.3s ease;
+}
+
+.badge-open {
+    background-color: #17a2b8;
+    color: white;
+    padding: 0.25rem 0.75rem;
+    border-radius: 0.25rem;
+    font-size: 0.85em;
+}
+
+.badge-closed {
+    background-color: #28a745;
+    color: white;
+    padding: 0.25rem 0.75rem;
+    border-radius: 0.25rem;
+    font-size: 0.85em;
+}
+</style>
+{% endblock %}

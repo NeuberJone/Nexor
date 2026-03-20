@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+
+{% block title %}Configurações — Nexor{% endblock %}
+{% block page_title %}Configurações{% endblock %}
+
+{% block content %}
+<div class="grid-2 gap-20">
+  <div>
+    <div class="section-header"><span class="section-title">Importação de Logs</span></div>
+    <div class="card">
+      <div class="form-group">
+        <label class="form-label">Pasta de Logs</label>
+        <input type="text" value="C:\Producao\Logs" placeholder="Caminho da pasta" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">Intervalo de Importação (minutos)</label>
+        <input type="number" value="5" min="1" max="60" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">
+          <input type="checkbox" checked /> Importação Automática
+        </label>
+      </div>
+      <button class="btn-primary" style="width:100%;margin-top:16px" onclick="runImport()">Executar Importação Agora</button>
+    </div>
+
+    <div class="section-header" style="margin-top:24px"><span class="section-title">Exportação</span></div>
+    <div class="card">
+      <div class="form-group">
+        <label class="form-label">Pasta de Exportação</label>
+        <input type="text" value="C:\Producao\Exportados" placeholder="Caminho da pasta" />
+      </div>
+      <div class="form-group">
+        <label class="form-label">
+          <input type="checkbox" checked /> Exportar PDF
+        </label>
+      </div>
+      <div class="form-group">
+        <label class="form-label">
+          <input type="checkbox" /> Exportar JPG
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="section-header"><span class="section-title">Padrões</span></div>
+    <div class="card">
+      <div class="form-group">
+        <label class="form-label">Máquina Padrão</label>
+        <select>
+          <option>MQ-A</option>
+          <option>MQ-B</option>
+          <option>MQ-C</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Operador Padrão</label>
+        <select>
+          <option>Carlos Mendes</option>
+          <option>Rosana Teixeira</option>
+          <option>Leandro Souza</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="section-header" style="margin-top:24px"><span class="section-title">Sistema</span></div>
+    <div class="card">
+      <div class="flex justify-between items-center" style="margin-bottom:12px">
+        <span>Versão</span>
+        <span class="fw-600">1.0.0</span>
+      </div>
+      <div class="flex justify-between items-center" style="margin-bottom:12px">
+        <span>Banco de Dados</span>
+        <span class="fw-600" id="db-status">Conectado</span>
+      </div>
+      <div class="flex justify-between items-center">
+        <span>API Backend</span>
+        <span class="fw-600" id="api-status">Online</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+async function runImport() {
+  if (!confirm('Deseja executar a importação de logs agora?')) return;
+  
+  try {
+    const response = await fetch('/api/import', { method: 'POST' });
+    const result = await response.json();
+    
+    if (result.ok) {
+      toast('Importação concluída com sucesso!', 'success');
+    } else {
+      toast('Erro na importação: ' + (result.error || 'desconhecido'), 'error');
+    }
+  } catch (e) {
+    console.error('Erro:', e);
+    toast('Erro ao executar importação', 'error');
+  }
+}
+
+// Check status on load
+document.addEventListener('DOMContentLoaded', async function() {
+  try {
+    const status = await fetch('/api/status').then(r => r.json());
+    document.getElementById('api-status').textContent = status.backend_online ? 'Online' : 'Offline';
+  } catch (e) {
+    document.getElementById('api-status').textContent = 'Offline';
+  }
+});
+</script>
+{% endblock %}

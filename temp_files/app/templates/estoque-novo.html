@@ -1,0 +1,527 @@
+{% extends "base.html" %}
+
+{% block page_title %}Estoque de Tecidos{% endblock %}
+{% block page_action_btn %}Adicionar Rolo{% endblock %}
+
+{% block content %}
+<div class="page-container">
+    <div class="tabs">
+        <button class="tab-btn active" onclick="switchTab('inventory')">
+            <span class="icon">📦</span> Inventário
+        </button>
+        <button class="tab-btn" onclick="switchTab('movements')">
+            <span class="icon">📊</span> Movimentações
+        </button>
+        <button class="tab-btn" onclick="switchTab('alerts')">
+            <span class="icon">⚠️</span> Alertas
+        </button>
+        <button class="tab-btn" onclick="switchTab('summary')">
+            <span class="icon">📈</span> Resumo
+        </button>
+    </div>
+
+    <!-- Tab 1: Inventário -->
+    <div id="inventory" class="tab-content active">
+        <div class="section">
+            <h3>Inventário de Tecidos</h3>
+            
+            <!-- Filtros -->
+            <div class="filter-group">
+                <div class="filter-item">
+                    <label>Tecido:</label>
+                    <input type="text" id="filter-fabric" placeholder="Buscar tecido..." onkeyup="filterInventory()">
+                </div>
+                <div class="filter-item">
+                    <label>Status:</label>
+                    <select id="filter-status" onchange="filterInventory()">
+                        <option value="available">Disponível</option>
+                        <option value="reserved">Reservado</option>
+                        <option value="expired">Expirado</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Tabela de Inventário -->
+            <div class="data-table-wrapper">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Tecido</th>
+                            <th>Quantidade (m)</th>
+                            <th>Fornecedor</th>
+                            <th>Lote</th>
+                            <th>Localização</th>
+                            <th>Status</th>
+                            <th>Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody id="inventory-tbody">
+                        <tr>
+                            <td colspan="8" class="empty-state">Carregando...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab 2: Movimentações -->
+    <div id="movements" class="tab-content">
+        <div class="section">
+            <h3>Histórico de Movimentações</h3>
+            
+            <!-- Filtros -->
+            <div class="filter-group">
+                <div class="filter-item">
+                    <label>Rolo de Estoque:</label>
+                    <select id="filter-stock-roll" onchange="filterMovements()">
+                        <option value="">Todos</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Tabela de Movimentações -->
+            <div class="data-table-wrapper">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Rolo Estoque</th>
+                            <th>Tipo</th>
+                            <th>Quantidade (m)</th>
+                            <th>Operador</th>
+                            <th>Data/Hora</th>
+                        </tr>
+                    </thead>
+                    <tbody id="movements-tbody">
+                        <tr>
+                            <td colspan="6" class="empty-state">Carregando...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab 3: Alertas -->
+    <div id="alerts" class="tab-content">
+        <div class="section">
+            <h3>Alertas de Estoque</h3>
+            
+            <div id="alerts-container" style="display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 1rem;">
+                <!-- Preenchido dinamicamente -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab 4: Resumo -->
+    <div id="summary" class="tab-content">
+        <div class="section">
+            <h3>Resumo de Estoque</h3>
+            
+            <div class="summary-cards">
+                <div class="summary-card">
+                    <div class="label">Total em Estoque</div>
+                    <div class="value" id="summary-total">0 m</div>
+                </div>
+                <div class="summary-card">
+                    <div class="label">Rolos</div>
+                    <div class="value" id="summary-rolls">0</div>
+                </div>
+                <div class="summary-card">
+                    <div class="label">Tecidos Únicos</div>
+                    <div class="value" id="summary-fabrics">0</div>
+                </div>
+                <div class="summary-card">
+                    <div class="label">Alertas Ativos</div>
+                    <div class="value" id="summary-alerts">0</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Adicionar Rolo -->
+<div id="add-roll-modal" class="modal" style="display: none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Adicionar Rolo de Estoque</h2>
+            <button class="close-btn" onclick="closeModal('add-roll-modal')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <form id="add-roll-form">
+                <div class="form-group">
+                    <label>Tecido *</label>
+                    <input type="text" id="add-fabric" required>
+                </div>
+                <div class="form-group">
+                    <label>Quantidade (m) *</label>
+                    <input type="number" id="add-quantity" step="0.01" required>
+                </div>
+                <div class="form-group">
+                    <label>Fornecedor</label>
+                    <input type="text" id="add-supplier">
+                </div>
+                <div class="form-group">
+                    <label>Código do Lote</label>
+                    <input type="text" id="add-batch">
+                </div>
+                <div class="form-group">
+                    <label>Localização</label>
+                    <input type="text" id="add-location">
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">Adicionar</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('add-roll-modal')">Cancelar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Modal: Consumir Estoque -->
+<div id="consume-modal" class="modal" style="display: none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Consumir Estoque</h2>
+            <button class="close-btn" onclick="closeModal('consume-modal')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <form id="consume-form">
+                <input type="hidden" id="consume-stock-id">
+                <div class="form-group">
+                    <label>Quantidade a Consumir (m) *</label>
+                    <input type="number" id="consume-quantity" step="0.01" required>
+                </div>
+                <div class="form-group">
+                    <label>Operador</label>
+                    <input type="text" id="consume-operator">
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">Consumir</button>
+                    <button type="button" class="btn btn-secondary" onclick="closeModal('consume-modal')">Cancelar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+let allRolls = [];
+let allMovements = [];
+let allAlerts = [];
+
+// ============================================================
+// Load Data
+// ============================================================
+
+function loadInventory() {
+    fetch('/api/stock/rolls?status=available')
+        .then(r => r.json())
+        .then(data => {
+            allRolls = data.rolls || [];
+            displayInventory(allRolls);
+            populateStockRollFilter();
+        })
+        .catch(err => console.error('Erro ao carregar inventário:', err));
+}
+
+function loadMovements() {
+    fetch('/api/stock/movements?limit=1000')
+        .then(r => r.json())
+        .then(data => {
+            allMovements = data.movements || [];
+            displayMovements(allMovements);
+        })
+        .catch(err => console.error('Erro ao carregar movimentações:', err));
+}
+
+function loadAlerts() {
+    fetch('/api/stock/alerts?status=active')
+        .then(r => r.json())
+        .then(data => {
+            allAlerts = data.alerts || [];
+            displayAlerts(allAlerts);
+        })
+        .catch(err => console.error('Erro ao carregar alertas:', err));
+}
+
+function loadSummary() {
+    fetch('/api/stock/summary')
+        .then(r => r.json())
+        .then(data => {
+            const summary = data.summary;
+            document.getElementById('summary-total').textContent = `${summary.total_m} m`;
+            document.getElementById('summary-rolls').textContent = summary.roll_count;
+            document.getElementById('summary-fabrics').textContent = summary.fabric_count;
+            document.getElementById('summary-alerts').textContent = summary.active_alerts;
+        })
+        .catch(err => console.error('Erro ao carregar resumo:', err));
+}
+
+// ============================================================
+// Display Functions
+// ============================================================
+
+function displayInventory(rolls) {
+    let html = '';
+    
+    rolls.forEach(roll => {
+        html += `
+            <tr>
+                <td>${roll.id}</td>
+                <td>${roll.fabric}</td>
+                <td>${roll.quantity_m.toFixed(2)}</td>
+                <td>${roll.supplier || '-'}</td>
+                <td>${roll.batch_code || '-'}</td>
+                <td>${roll.location || '-'}</td>
+                <td><span class="badge badge-success">${roll.status}</span></td>
+                <td>
+                    <button class="btn btn-sm btn-primary" onclick="openConsumeModal(${roll.id})">Consumir</button>
+                </td>
+            </tr>
+        `;
+    });
+    
+    document.getElementById('inventory-tbody').innerHTML = html || '<tr><td colspan="8" class="empty-state">Nenhum rolo em estoque</td></tr>';
+}
+
+function displayMovements(movements) {
+    let html = '';
+    
+    movements.forEach(movement => {
+        const date = new Date(movement.created_at).toLocaleString('pt-BR');
+        html += `
+            <tr>
+                <td>${movement.id}</td>
+                <td>${movement.stock_roll_id}</td>
+                <td>${movement.movement_type}</td>
+                <td>${movement.quantity_m.toFixed(2)}</td>
+                <td>${movement.operator || '-'}</td>
+                <td>${date}</td>
+            </tr>
+        `;
+    });
+    
+    document.getElementById('movements-tbody').innerHTML = html || '<tr><td colspan="6" class="empty-state">Nenhuma movimentação</td></tr>';
+}
+
+function displayAlerts(alerts) {
+    let html = '';
+    
+    alerts.forEach(alert => {
+        const color = alert.alert_type === 'low_stock' ? '#ff6b6b' : '#ffd93d';
+        html += `
+            <div class="alert-card" style="border-left: 4px solid ${color}; padding: 1rem; background: #f8f9fa; border-radius: 0.25rem;">
+                <h4 style="margin: 0 0 0.5rem 0;">${alert.fabric}</h4>
+                <p style="margin: 0.25rem 0;">
+                    <strong>Tipo:</strong> ${alert.alert_type === 'low_stock' ? 'Estoque Baixo' : 'Outro'}
+                </p>
+                <p style="margin: 0.25rem 0;">
+                    <strong>Quantidade Atual:</strong> ${alert.current_quantity_m.toFixed(2)} m
+                </p>
+                <p style="margin: 0.25rem 0;">
+                    <strong>Limite:</strong> ${alert.threshold_m.toFixed(2)} m
+                </p>
+            </div>
+        `;
+    });
+    
+    document.getElementById('alerts-container').innerHTML = html || '<p class="empty-state">Nenhum alerta ativo</p>';
+}
+
+// ============================================================
+// Filters
+// ============================================================
+
+function filterInventory() {
+    const fabric = document.getElementById('filter-fabric').value.toLowerCase();
+    const status = document.getElementById('filter-status').value;
+    
+    const filtered = allRolls.filter(roll => {
+        const matchFabric = !fabric || roll.fabric.toLowerCase().includes(fabric);
+        const matchStatus = !status || roll.status === status;
+        return matchFabric && matchStatus;
+    });
+    
+    displayInventory(filtered);
+}
+
+function filterMovements() {
+    const stockId = document.getElementById('filter-stock-roll').value;
+    
+    const filtered = stockId 
+        ? allMovements.filter(m => m.stock_roll_id == stockId)
+        : allMovements;
+    
+    displayMovements(filtered);
+}
+
+function populateStockRollFilter() {
+    const select = document.getElementById('filter-stock-roll');
+    const fabrics = [...new Set(allRolls.map(r => r.fabric))];
+    
+    let html = '<option value="">Todos</option>';
+    fabrics.forEach(fabric => {
+        html += `<option value="${fabric}">${fabric}</option>`;
+    });
+    
+    select.innerHTML = html;
+}
+
+// ============================================================
+// Actions
+// ============================================================
+
+function openAddRollModal() {
+    document.getElementById('add-roll-modal').style.display = 'flex';
+}
+
+function openConsumeModal(stockId) {
+    document.getElementById('consume-stock-id').value = stockId;
+    document.getElementById('consume-modal').style.display = 'flex';
+}
+
+function closeModal(modalId) {
+    document.getElementById(modalId).style.display = 'none';
+}
+
+document.getElementById('add-roll-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    
+    const data = {
+        fabric: document.getElementById('add-fabric').value,
+        quantity_m: parseFloat(document.getElementById('add-quantity').value),
+        supplier: document.getElementById('add-supplier').value || null,
+        batch_code: document.getElementById('add-batch').value || null,
+        location: document.getElementById('add-location').value || null,
+    };
+    
+    fetch('/api/stock/rolls', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.ok) {
+            showToast('Rolo adicionado com sucesso!', 'success');
+            closeModal('add-roll-modal');
+            loadInventory();
+            loadSummary();
+        } else {
+            showToast('Erro ao adicionar rolo: ' + data.error, 'error');
+        }
+    })
+    .catch(err => {
+        console.error('Erro:', err);
+        showToast('Erro ao adicionar rolo', 'error');
+    });
+});
+
+document.getElementById('consume-form').addEventListener('submit', function(e) {
+    e.preventDefault();
+    
+    const data = {
+        stock_roll_id: parseInt(document.getElementById('consume-stock-id').value),
+        quantity_m: parseFloat(document.getElementById('consume-quantity').value),
+        operator: document.getElementById('consume-operator').value || null,
+    };
+    
+    fetch('/api/stock/consume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+    })
+    .then(r => r.json())
+    .then(data => {
+        if (data.ok) {
+            showToast('Estoque consumido com sucesso!', 'success');
+            closeModal('consume-modal');
+            loadInventory();
+            loadMovements();
+            loadSummary();
+            loadAlerts();
+        } else {
+            showToast('Erro: ' + data.error, 'error');
+        }
+    })
+    .catch(err => {
+        console.error('Erro:', err);
+        showToast('Erro ao consumir estoque', 'error');
+    });
+});
+
+// ============================================================
+// Tabs
+// ============================================================
+
+function switchTab(tabName) {
+    document.querySelectorAll('.tab-content').forEach(tab => {
+        tab.classList.remove('active');
+    });
+    
+    document.querySelectorAll('.tab-btn').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    
+    document.getElementById(tabName).classList.add('active');
+    event.target.classList.add('active');
+}
+
+// ============================================================
+// Init
+// ============================================================
+
+document.addEventListener('DOMContentLoaded', function() {
+    loadInventory();
+    loadMovements();
+    loadAlerts();
+    loadSummary();
+    
+    // Recarregar dados a cada 30 segundos
+    setInterval(() => {
+        loadSummary();
+        loadAlerts();
+    }, 30000);
+});
+
+// Interceptar clique no botão de ação da página
+document.addEventListener('DOMContentLoaded', function() {
+    const actionBtn = document.querySelector('.page-action-btn');
+    if (actionBtn) {
+        actionBtn.addEventListener('click', openAddRollModal);
+    }
+});
+</script>
+
+<style>
+.alert-card {
+    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.badge {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    border-radius: 1rem;
+    font-size: 0.85em;
+    font-weight: bold;
+}
+
+.badge-success {
+    background-color: #d4edda;
+    color: #155724;
+}
+
+.badge-warning {
+    background-color: #fff3cd;
+    color: #856404;
+}
+
+.badge-danger {
+    background-color: #f8d7da;
+    color: #721c24;
+}
+</style>
+{% endblock %}

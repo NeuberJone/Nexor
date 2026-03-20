@@ -1,0 +1,158 @@
+{% extends "base.html" %}
+
+{% block title %}Rolos — Nexor{% endblock %}
+{% block page_title %}Rolos{% endblock %}
+
+{% block content %}
+<div>
+  <div class="section-header">
+    <div>
+      <div class="section-title">Gerenciamento de Rolos</div>
+      <div class="section-sub"><span id="rolls-count">0</span> rolos registrados</div>
+    </div>
+    <button class="btn-primary" onclick="navigate('operacao')">+ Novo Rolo</button>
+  </div>
+
+  <div class="filter-bar">
+    <div class="search-bar" style="flex:1">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <input type="text" placeholder="Buscar rolo..." oninput="filterRolls(this.value)" />
+    </div>
+    <select onchange="filterByStatus(this.value)">
+      <option value="">Todos os status</option>
+      <option value="open">Abertos</option>
+      <option value="closed">Fechados</option>
+    </select>
+  </div>
+
+  <div class="card" style="padding:0;overflow:hidden">
+    <table>
+      <thead>
+        <tr>
+          <th>Rolo</th>
+          <th>Tecido</th>
+          <th>Máquina</th>
+          <th>Metros</th>
+          <th>Status</th>
+          <th>Data</th>
+          <th>Ações</th>
+        </tr>
+      </thead>
+      <tbody id="rolls-table">
+        <tr><td colspan="7"><div class="empty-state" style="padding:30px"><p>Carregando rolos...</p></div></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+let allRolls = [];
+
+async function loadRolls() {
+  try {
+    const data = await fetch('/api/rolls').then(r => r.json());
+    allRolls = data || [];
+    renderRolls(allRolls);
+  } catch (e) {
+    console.error('Erro ao carregar rolos:', e);
+    toast('Erro ao carregar rolos', 'error');
+  }
+}
+
+function renderRolls(rolls) {
+  document.getElementById('rolls-count').textContent = rolls.length;
+  const tbody = document.getElementById('rolls-table');
+  
+  if (rolls.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="7"><div class="empty-state" style="padding:30px"><p>Nenhum rolo registrado</p></div></td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = rolls.map(r => `
+    <tr>
+      <td class="fw-600">${r.roll_name || 'ROLO-' + r.id}</td>
+      <td>${r.fabric || '—'}</td>
+      <td>${r.machine || '—'}</td>
+      <td>${Math.round((r.total_effective_m || 0) * 100) / 100}m</td>
+      <td>${statusBadge(r.status === 'closed' ? 'fechado' : 'aberto')}</td>
+      <td class="text-muted text-sm">${fmtDateShort(r.closed_at || r.created_at)}</td>
+      <td class="tbl-actions">
+        ${r.status !== 'closed' ? `<button class="btn-ghost btn-sm" onclick="closeRoll(${r.id})">Fechar</button>` : ''}
+        <button class="btn-ghost btn-sm" onclick="viewRoll(${r.id})">Detalhes</button>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function filterRolls(q) {
+  const filtered = allRolls.filter(r => {
+    const name = (r.roll_name || '').toLowerCase();
+    const fabric = (r.fabric || '').toLowerCase();
+    return name.includes(q.toLowerCase()) || fabric.includes(q.toLowerCase());
+  });
+  renderRolls(filtered);
+}
+
+function filterByStatus(status) {
+  let filtered = allRolls;
+  if (status === 'open') {
+    filtered = allRolls.filter(r => r.status !== 'closed');
+  } else if (status === 'closed') {
+    filtered = allRolls.filter(r => r.status === 'closed');
+  }
+  renderRolls(filtered);
+}
+
+async function closeRoll(rollId) {
+  if (!confirm('Tem certeza que deseja fechar este rolo?')) return;
+  
+  try {
+    const response = await fetch(`/api/rolls/${rollId}/close`, { method: 'POST' });
+    const result = await response.json();
+    
+    if (result.ok) {
+      toast('Rolo fechado com sucesso!', 'success');
+      await loadRolls();
+    } else {
+      toast('Erro ao fechar rolo', 'error');
+    }
+  } catch (e) {
+    console.error('Erro:', e);
+    toast('Erro ao fechar rolo', 'error');
+  }
+}
+
+function viewRoll(rollId) {
+  const roll = allRolls.find(r => r.id === rollId);
+  if (!roll) return;
+  
+  const body = `
+    <div class="form-group">
+      <label class="form-label">Rolo</label>
+      <input type="text" value="${roll.roll_name || 'ROLO-' + roll.id}" disabled />
+    </div>
+    <div class="form-group">
+      <label class="form-label">Tecido</label>
+      <input type="text" value="${roll.fabric || '—'}" disabled />
+    </div>
+    <div class="form-group">
+      <label class="form-label">Máquina</label>
+      <input type="text" value="${roll.machine || '—'}" disabled />
+    </div>
+    <div class="form-group">
+      <label class="form-label">Total de Metros</label>
+      <input type="text" value="${Math.round((roll.total_effective_m || 0) * 100) / 100}m" disabled />
+    </div>
+    <div class="form-group">
+      <label class="form-label">Status</label>
+      <input type="text" value="${roll.status || 'aberto'}" disabled />
+    </div>
+  `;
+  
+  openModal('Detalhes do Rolo', body, '<button class="btn-secondary" onclick="closeModal()">Fechar</button>');
+}
+
+// Load rolls on page load
+document.addEventListener('DOMContentLoaded', loadRolls);
+</script>
+{% endblock %}

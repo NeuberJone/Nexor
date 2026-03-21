@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 
 from core.exceptions import LogValidationError
-from core.models import ProductionJob
+from core.models import Machine, ProductionJob
 from machines.registry import resolve_machine
 
 
@@ -84,7 +84,27 @@ def resolve_computer_name(general: dict) -> str:
     return computer_name
 
 
-def map_sections_to_job(sections: dict, source_path: str | None = None) -> ProductionJob:
+def resolve_machine_with_optional_registry(
+    *,
+    computer_name: str,
+    driver: str | None,
+    machine_registry: dict | None = None,
+) -> str:
+    if machine_registry:
+        found = machine_registry.get(computer_name)
+        if found is not None:
+            if isinstance(found, Machine):
+                return found.machine_id
+            return str(found).strip() or "UNKNOWN_MACHINE"
+
+    return resolve_machine(computer_name=computer_name, driver=driver)
+
+
+def map_sections_to_job(
+    sections: dict,
+    source_path: str | None = None,
+    machine_registry: dict | None = None,
+) -> ProductionJob:
     general = safe_section(sections, "General")
     item = safe_section(sections, "1")
     costs = safe_section(sections, "Costs")
@@ -97,18 +117,17 @@ def map_sections_to_job(sections: dict, source_path: str | None = None) -> Produ
 
     duration = int((end_time - start_time).total_seconds())
     if duration < 0:
-        raise LogValidationError("EndTime before StartTime")
+        raise LogValidationError("EndTime anterior ao StartTime")
 
     computer_name = resolve_computer_name(general)
     driver = (str(general.get("Driver") or "").strip() or None)
 
-    machine = resolve_machine(
+    machine = resolve_machine_with_optional_registry(
         computer_name=computer_name,
         driver=driver,
+        machine_registry=machine_registry,
     )
 
-    # HeightMM is the real printed height and must be the source of truth
-    # for actual printed length. If it is missing, fall back to Costs.PrintHeightMM.
     height_mm = parse_float(item.get("HeightMM"))
     costs_print_height_mm = parse_float(costs.get("PrintHeightMM"))
 
@@ -118,8 +137,6 @@ def map_sections_to_job(sections: dict, source_path: str | None = None) -> Produ
     if height_mm <= 0:
         raise LogValidationError("Missing or invalid HeightMM")
 
-    # VPosMM / VPositionMM is an offset before the print starts.
-    # It is not part of the real printed length.
     vpos_mm = parse_float(item.get("VPosMM") or item.get("VPositionMM"))
     if vpos_mm < 0:
         vpos_mm = 0.0
@@ -127,13 +144,9 @@ def map_sections_to_job(sections: dict, source_path: str | None = None) -> Produ
     actual_printed_length_m = height_mm / 1000.0
     gap_before_m = vpos_mm / 1000.0
 
-    # Consumed length represents roll usage, so it should include the gap.
-    # If Costs.PrintHeightMM is present and larger, preserve it as a safer upper bound.
     consumed_height_mm = max(costs_print_height_mm, height_mm + vpos_mm)
     consumed_length_m = consumed_height_mm / 1000.0
 
-    # Keep planned_length_m for compatibility with the current repository/analytics,
-    # but align it with the real printable job length for now.
     planned_length_m = actual_printed_length_m
 
     return ProductionJob(

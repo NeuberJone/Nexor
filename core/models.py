@@ -24,8 +24,6 @@ LOG_CONVERTED = "CONVERTED"
 # ---------------------------------------------------------------------------
 # Roll status constants
 # ---------------------------------------------------------------------------
-# Keep OPEN for compatibility with the current repository/schema.
-# DRAFT is the conceptual/documented name for the same initial state.
 ROLL_OPEN = "OPEN"
 ROLL_DRAFT = ROLL_OPEN
 ROLL_CLOSED = "CLOSED"
@@ -56,10 +54,6 @@ class Machine:
 class Log:
     """
     Raw imported production record.
-
-    This entity was introduced to align the codebase with the new Nexor
-    documentation without forcing a full migration of repositories and mappers
-    in the same commit.
     """
 
     id: int | None = None
@@ -87,14 +81,10 @@ class Log:
 class Job:
     """
     Normalized operational event derived from a parsed log.
-
-    Notes about compatibility:
-    - The project currently persists jobs in the `production_jobs` table.
-    - Some modules still import `ProductionJob` directly.
-    - `ProductionJob` remains available below as an alias to this class.
     """
 
     id: int | None = None
+    log_id: int | None = None
     job_id: str = ""
     machine: str = ""
     computer_name: str = ""
@@ -129,6 +119,7 @@ class Job:
     review_note: str | None = None
     reviewed_by: str | None = None
     reviewed_at: datetime | None = None
+    classification: str | None = None
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -139,8 +130,8 @@ class Job:
         self.gap_before_m = float(self.gap_before_m or 0.0)
         self.consumed_length_m = float(self.consumed_length_m or 0.0)
 
-        # Compatibility fix for the current mapper: if `actual_printed_length_m`
-        # is not passed, infer it from the best available source.
+        # Compatibility fix for older mappers:
+        # if actual_printed_length_m is not explicitly provided, infer it.
         if self.actual_printed_length_m <= 0:
             if self.planned_length_m > 0:
                 self.actual_printed_length_m = self.planned_length_m
@@ -148,12 +139,11 @@ class Job:
                 inferred = self.consumed_length_m - self.gap_before_m
                 self.actual_printed_length_m = max(inferred, 0.0)
 
-        # Keep total consumption consistent when mapper/repository only provides
-        # printed length and offset.
+        # Keep total consumption coherent.
         if self.consumed_length_m <= 0:
             self.consumed_length_m = self.actual_printed_length_m + self.gap_before_m
 
-        # Normalize potential negative artifacts.
+        # Normalize negative artifacts.
         if self.actual_printed_length_m < 0:
             self.actual_printed_length_m = 0.0
         if self.gap_before_m < 0:
@@ -171,6 +161,11 @@ class Job:
     @property
     def total_consumption_m(self) -> float:
         return self.consumed_length_m
+
+    @property
+    def length_m(self) -> float:
+        # Compatibility with older tests/flows.
+        return self.actual_printed_length_m
 
     @property
     def is_suspicious(self) -> bool:
@@ -198,13 +193,12 @@ class Job:
         Compatibility placeholder.
 
         The current persisted relationship between jobs and rolls is stored via
-        `roll_items`, not directly on the job row. This property allows the new
-        conceptual model to exist without breaking the current repository API.
+        roll_items, not directly on the job row.
         """
         return None
 
 
-# Transitional compatibility alias used by current mapper/repository modules.
+# Transitional compatibility alias
 ProductionJob = Job
 
 

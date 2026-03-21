@@ -52,3 +52,6 @@ Nexor Raws.txt
 
 # Log Import Files
 logs_import
+
+# Exported data
+exports/out/

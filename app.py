@@ -5,6 +5,7 @@ import hashlib
 from pathlib import Path
 from typing import Any
 
+from exports.roll_export_service import export_closed_roll
 from logs.service import import_and_persist_log
 from storage.database import init_database
 from storage.log_sources_repository import LogSourceRepository
@@ -150,6 +151,18 @@ def parse_args():
         help="Ignora o checkpoint das fontes e relê todos os logs.",
     )
 
+    parser.add_argument(
+        "--export-roll-id",
+        type=int,
+        help="Exporta um rolo fechado pelo ID.",
+    )
+
+    parser.add_argument(
+        "--export-output-dir",
+        default="exports/out",
+        help="Diretório de saída da exportação do rolo.",
+    )
+
     return parser.parse_args()
 
 
@@ -169,15 +182,38 @@ def print_job_details(job) -> None:
     print(f"Consumo operacional total: {format_meters(job.total_consumption_m)} m")
 
 
-def main():
-    args = parse_args()
+def handle_export_roll(roll_id: int, output_dir: str | Path) -> int:
+    print("\nNEXOR ROLL EXPORT\n")
+    print(f"Rolo ID: {roll_id}")
+    print(f"Diretório de saída: {Path(output_dir)}\n")
 
+    try:
+        result = export_closed_roll(
+            roll_id=roll_id,
+            output_dir=output_dir,
+        )
+    except Exception as exc:
+        print("Status: ERRO")
+        print(f"Motivo: {exc}")
+        return 1
+
+    print("Status: EXPORTADO")
+    print(f"Rolo: {result['roll_name']}")
+    print(f"Jobs: {result['jobs_count']}")
+    print(f"Total planejado: {format_meters(result['total_planned_m'])} m")
+    print(f"Impresso efetivo: {format_meters(result['total_effective_m'])} m")
+    print(f"Gap total: {format_meters(result['total_gap_m'])} m")
+    print(f"Consumo total: {format_meters(result['total_consumed_m'])} m")
+    print(f"PDF: {result['pdf_path']}")
+    print(f"JPG: {result['jpg_path']}")
+    return 0
+
+
+def handle_import(force_rescan: bool) -> int:
     print("\nNEXOR LOG IMPORT\n")
 
-    if args.force_rescan:
+    if force_rescan:
         print("Modo: FORCE RESCAN (releitura completa das fontes)\n")
-
-    init_database()
 
     source_repo = LogSourceRepository()
     audit_repo = ImportAuditRepository()
@@ -187,7 +223,7 @@ def main():
     if not sources:
         print("Nenhuma fonte de logs ativa cadastrada.")
         print("Cadastre pelo menos uma fonte em 'log_sources'.")
-        return
+        return 0
 
     grand_total_found = 0
     grand_imported = 0
@@ -212,11 +248,11 @@ def main():
         if source_id is not None:
             safe_call("update_last_scan_at failed", source_repo.update_last_scan_at, source_id)
 
-        files = iter_source_files(source, force_rescan=args.force_rescan)
+        files = iter_source_files(source, force_rescan=force_rescan)
         total = len(files)
 
         if not files:
-            if args.force_rescan:
+            if force_rescan:
                 print("Nenhum arquivo encontrado nesta fonte.\n")
             else:
                 print("Nenhum arquivo novo encontrado nesta fonte.\n")
@@ -262,8 +298,6 @@ def main():
                     status = "DUPLICATE"
                     print("Status: DUPLICADO")
 
-                    # Duplicates should still advance the checkpoint to avoid
-                    # reprocessing the same modified file forever.
                     if max_successful_mtime is None or file_mtime > float(max_successful_mtime):
                         max_successful_mtime = file_mtime
 
@@ -387,6 +421,21 @@ def main():
     print(f"Impresso real da arte: {format_meters(grand_actual_printed)} m")
     print(f"Consumo operacional total: {format_meters(grand_consumed_length)} m")
 
+    return 0
+
+
+def main() -> int:
+    args = parse_args()
+    init_database()
+
+    if args.export_roll_id is not None:
+        return handle_export_roll(
+            roll_id=args.export_roll_id,
+            output_dir=args.export_output_dir,
+        )
+
+    return handle_import(force_rescan=args.force_rescan)
+
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

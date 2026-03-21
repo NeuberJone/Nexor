@@ -8,8 +8,9 @@ from typing import Any
 from exports.roll_export_service import export_closed_roll
 from logs.service import import_and_persist_log
 from storage.database import init_database
-from storage.log_sources_repository import LogSourceRepository
 from storage.import_audit_repository import ImportAuditRepository
+from storage.log_sources_repository import LogSourceRepository
+from storage.repository import ProductionRepository
 
 
 def format_meters(value: float) -> str:
@@ -141,26 +142,40 @@ def iter_source_files(source_row, force_rescan: bool = False):
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(
-        description="Nexor log import engine"
-    )
+    parser = argparse.ArgumentParser(description="Nexor operational CLI")
 
-    parser.add_argument(
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
         "--force-rescan",
         action="store_true",
         help="Ignora o checkpoint das fontes e relê todos os logs.",
     )
-
-    parser.add_argument(
+    mode_group.add_argument(
         "--export-roll-id",
         type=int,
         help="Exporta um rolo fechado pelo ID.",
+    )
+    mode_group.add_argument(
+        "--list-rolls",
+        action="store_true",
+        help="Lista os rolos cadastrados no banco.",
+    )
+    mode_group.add_argument(
+        "--show-roll-id",
+        type=int,
+        help="Mostra o detalhe completo de um rolo pelo ID.",
     )
 
     parser.add_argument(
         "--export-output-dir",
         default="exports/out",
         help="Diretório de saída da exportação do rolo.",
+    )
+
+    parser.add_argument(
+        "--roll-status",
+        default="ALL",
+        help="Filtro de status ao listar rolos. Ex.: ALL, OPEN, CLOSED, EXPORTED.",
     )
 
     return parser.parse_args()
@@ -180,6 +195,28 @@ def print_job_details(job) -> None:
     print(f"Espaço técnico antes: {format_meters(job.gap_before_m)} m")
     print(f"Impresso real da arte: {format_meters(job.actual_printed_length_m)} m")
     print(f"Consumo operacional total: {format_meters(job.total_consumption_m)} m")
+
+
+def print_roll_summary_block(summary: dict) -> None:
+    roll = summary["roll"]
+
+    print(f"ID: {roll.id}")
+    print(f"Roll: {roll.roll_name}")
+    print(f"Machine: {roll.machine}")
+    print(f"Fabric: {roll.fabric or '-'}")
+    print(f"Status: {roll.status}")
+    print(f"Created: {format_datetime(roll.created_at)}")
+    print(f"Closed: {format_datetime(roll.closed_at)}")
+    print(f"Exported: {format_datetime(roll.exported_at)}")
+    print(f"Reviewed: {format_datetime(roll.reviewed_at)}")
+    print(f"Reopened: {format_datetime(roll.reopened_at)}")
+    print(f"Jobs: {summary['jobs_count']}")
+    print(f"Total planned (m): {format_meters(summary['total_planned_m'])}")
+    print(f"Total effective (m): {format_meters(summary['total_effective_m'])}")
+    print(f"Total gap (m): {format_meters(summary['total_gap_m'])}")
+    print(f"Total consumed (m): {format_meters(summary['total_consumed_m'])}")
+    print(f"Efficiency ratio: {summary['efficiency_ratio'] if summary['efficiency_ratio'] is not None else '-'}")
+    print(f"Note: {roll.note or '-'}")
 
 
 def handle_export_roll(roll_id: int, output_dir: str | Path) -> int:
@@ -206,6 +243,89 @@ def handle_export_roll(roll_id: int, output_dir: str | Path) -> int:
     print(f"Consumo total: {format_meters(result['total_consumed_m'])} m")
     print(f"PDF: {result['pdf_path']}")
     print(f"JPG: {result['jpg_path']}")
+    return 0
+
+
+def handle_list_rolls(status: str = "ALL") -> int:
+    print("\nNEXOR ROLLS\n")
+
+    repo = ProductionRepository()
+    normalized_status = (status or "ALL").strip().upper()
+    rolls = repo.list_rolls(status=normalized_status)
+
+    if not rolls:
+        print(f"Nenhum rolo encontrado para status={normalized_status}.")
+        return 0
+
+    for roll in rolls:
+        summary = repo.get_roll_summary(roll.id)
+        print("=" * 72)
+        print_roll_summary_block(summary)
+
+        items = summary["items"]
+        if items:
+            print("\nItems:")
+            for item in items:
+                print(
+                    f"  - {item.job_id} | {item.document} | "
+                    f"eff={format_meters(item.effective_printed_length_m)}m | "
+                    f"gap={format_meters(item.gap_before_m)}m | "
+                    f"cons={format_meters(item.consumed_length_m)}m"
+                )
+        print()
+
+    return 0
+
+
+def handle_show_roll(roll_id: int) -> int:
+    print("\nNEXOR ROLL DETAIL\n")
+
+    repo = ProductionRepository()
+    roll = repo.get_roll(roll_id=roll_id)
+
+    if not roll:
+        print("Status: ERRO")
+        print(f"Motivo: Rolo não encontrado: id={roll_id}")
+        return 1
+
+    summary = repo.get_roll_summary(roll_id)
+
+    print_roll_summary_block(summary)
+
+    metric_counts = summary.get("metric_counts") or {}
+    fabric_totals = summary.get("fabric_totals") or {}
+
+    print("\nMetric counts:")
+    if metric_counts:
+        for key, value in metric_counts.items():
+            print(f"  - {key}: {value}")
+    else:
+        print("  - -")
+
+    print("\nFabric totals:")
+    if fabric_totals:
+        for key, value in fabric_totals.items():
+            print(f"  - {key}: {format_meters(value)} m")
+    else:
+        print("  - -")
+
+    print("\nItems:")
+    items = summary["items"]
+    if not items:
+        print("  - Nenhum item.")
+    else:
+        for item in items:
+            print(
+                f"  - Job={item.job_id} | Doc={item.document} | Machine={item.machine} | "
+                f"Fabric={item.fabric or '-'} | Planned={format_meters(item.planned_length_m)}m | "
+                f"Effective={format_meters(item.effective_printed_length_m)}m | "
+                f"Gap={format_meters(item.gap_before_m)}m | "
+                f"Consumed={format_meters(item.consumed_length_m)}m | "
+                f"Metric={item.metric_category or '-'} | "
+                f"Review={item.review_status or '-'} | "
+                f"PrintStatus={item.snapshot_print_status or '-'}"
+            )
+
     return 0
 
 
@@ -433,6 +553,12 @@ def main() -> int:
             roll_id=args.export_roll_id,
             output_dir=args.export_output_dir,
         )
+
+    if args.list_rolls:
+        return handle_list_rolls(status=args.roll_status)
+
+    if args.show_roll_id is not None:
+        return handle_show_roll(roll_id=args.show_roll_id)
 
     return handle_import(force_rescan=args.force_rescan)
 

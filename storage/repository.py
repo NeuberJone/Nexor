@@ -1,9 +1,9 @@
 from __future__ import annotations
 
+import re
 import sqlite3
 from datetime import datetime
 from pathlib import Path
-import re
 
 from analytics.production_metrics import classify_job, effective_printed_length_m
 from core.models import (
@@ -172,7 +172,7 @@ class ProductionRepository:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     source_path TEXT,
                     source_name TEXT,
-                    fingerprint TEXT UNIQUE,
+                    fingerprint TEXT,
                     machine_code_raw TEXT,
                     captured_at TEXT,
                     raw_payload TEXT,
@@ -345,7 +345,6 @@ class ProductionRepository:
         conn = conn or self.connect()
 
         try:
-            # Core jobs table compatibility / migrations
             self._ensure_table_columns(
                 conn,
                 self.table_name,
@@ -700,6 +699,82 @@ class ProductionRepository:
             rows = conn.execute(sql, params).fetchall()
             return [self.row_to_job(row) for row in rows]
 
+    def list_available_jobs(
+        self,
+        *,
+        machine: str | None = None,
+        fabric: str | None = None,
+        review_status: str | None = None,
+        include_suspicious: bool = True,
+        limit: int | None = None,
+    ) -> list[ProductionJob]:
+        """
+        Return jobs that are still eligible to be added to a roll.
+
+        Eligibility rules:
+        - not already present in roll_items
+        - counts_for_roll_export = 1 when the column exists
+        - print_status not in FAILED / CANCELED / TEST / IGNORED
+        - optional machine / fabric / review filters
+        - optional exclusion of suspicious jobs
+        """
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            columns = self.table_columns(conn)
+
+            where_clauses = [
+                "ri.job_row_id IS NULL",
+            ]
+            params: list[object] = []
+
+            if "counts_for_roll_export" in columns:
+                where_clauses.append(
+                    f"COALESCE(j.counts_for_roll_export, 1) = 1"
+                )
+
+            if "print_status" in columns:
+                where_clauses.append(
+                    "UPPER(COALESCE(j.print_status, 'OK')) NOT IN ('FAILED', 'CANCELED', 'TEST', 'IGNORED')"
+                )
+
+            if machine:
+                where_clauses.append("UPPER(COALESCE(j.machine, '')) = ?")
+                params.append(machine.strip().upper())
+
+            if fabric:
+                where_clauses.append("UPPER(COALESCE(j.fabric, '')) = ?")
+                params.append(fabric.strip().upper())
+
+            if review_status and review_status.strip().upper() != "ALL":
+                where_clauses.append("UPPER(COALESCE(j.review_status, '')) = ?")
+                params.append(review_status.strip().upper())
+
+            if not include_suspicious:
+                suspicion_checks = []
+                if "suspicion_category" in columns:
+                    suspicion_checks.append("j.suspicion_category IS NULL")
+                if "suspicion_reason" in columns:
+                    suspicion_checks.append("j.suspicion_reason IS NULL")
+
+                if suspicion_checks:
+                    where_clauses.append(" AND ".join(suspicion_checks))
+
+            sql = f"""
+                SELECT j.*
+                FROM {self.table_name} j
+                LEFT JOIN roll_items ri
+                    ON ri.job_row_id = j.id
+                WHERE {" AND ".join(where_clauses)}
+                ORDER BY j.start_time, j.job_id, j.id
+            """
+
+            if limit is not None:
+                sql += " LIMIT ?"
+                params.append(int(limit))
+
+            rows = conn.execute(sql, tuple(params)).fetchall()
+            return [self.row_to_job(row) for row in rows]
+
     def get_job_by_row_id(self, row_id: int) -> ProductionJob | None:
         with self.connect() as conn:
             self.ensure_runtime_fields(conn)
@@ -708,6 +783,27 @@ class ProductionRepository:
                 (row_id,),
             ).fetchone()
             return self.row_to_job(row) if row else None
+
+    def get_available_job_by_row_id(self, row_id: int) -> ProductionJob | None:
+        jobs = self.list_available_jobs(limit=None)
+        for job in jobs:
+            if int(job.id or 0) == int(row_id):
+                return job
+        return None
+
+    def job_is_assigned_to_any_roll(self, job_row_id: int) -> bool:
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM roll_items
+                WHERE job_row_id = ?
+                LIMIT 1
+                """,
+                (job_row_id,),
+            ).fetchone()
+            return row is not None
 
     def get_job_by_job_id(self, job_id: str) -> ProductionJob | None:
         with self.connect() as conn:

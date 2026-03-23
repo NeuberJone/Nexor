@@ -12,6 +12,8 @@ from application.operations_panel_service import (
     RollItemRow,
     RollSummaryDTO,
 )
+from ui.roll_closure_dialog import RollClosureDialog
+from ui.roll_export_result_dialog import RollExportResultDialog
 
 
 DEFAULT_WINDOW_SIZE = "1540x900"
@@ -597,35 +599,38 @@ class OperationsPanel(ttk.Frame):
         self._set_status(f"Item {job_row_id} removido do rolo {summary.roll_name}.")
 
     def close_active_roll(self) -> None:
-        if self.active_roll_id is None:
+        if self.current_summary is None or self.active_roll_id is None:
             messagebox.showwarning("Fechar rolo", "Nenhum rolo ativo selecionado.", parent=self)
             return
 
-        summary = self.current_summary
-        if summary and summary.jobs_count <= 0:
-            messagebox.showwarning("Fechar rolo", "Não é possível fechar um rolo vazio.", parent=self)
+        dialog = RollClosureDialog(
+            self.winfo_toplevel(),
+            service=self.service,
+            summary=self.current_summary,
+        )
+        self.wait_window(dialog)
+
+        if dialog.result_summary is None:
             return
 
-        if summary and summary.pending_review_count > 0:
-            text = "Este rolo possui jobs com PENDING_REVIEW.\n\nDeseja fechar mesmo assim?"
+        closed_summary = dialog.result_summary
+        self.current_summary = closed_summary
+
+        if dialog.export_result is not None:
+            result = dialog.export_result
+            result_dialog = RollExportResultDialog(self.winfo_toplevel(), result=result)
+            self.wait_window(result_dialog)
+            self._set_status(f"Rolo fechado e exportado: {closed_summary.roll_name}")
         else:
-            text = "Deseja fechar o rolo ativo?"
+            messagebox.showinfo(
+                "Fechamento concluído",
+                f"Rolo fechado com sucesso:\n{closed_summary.roll_name}",
+                parent=self,
+            )
+            self._set_status(f"Rolo fechado: {closed_summary.roll_name}")
 
-        proceed = messagebox.askyesno("Fechar rolo", text, parent=self)
-        if not proceed:
-            return
-
-        try:
-            closed = self.service.close_roll(roll_id=self.active_roll_id)
-        except Exception as exc:
-            self._handle_error("Falha ao fechar o rolo.", exc)
-            return
-
-        messagebox.showinfo("Rolo fechado", f"Rolo fechado com sucesso:\n{closed.roll_name}", parent=self)
-        self.current_summary = closed
         self.refresh_jobs()
         self.refresh_active_roll_summary()
-        self._set_status(f"Rolo fechado: {closed.roll_name}")
 
     def export_active_roll(self) -> None:
         if self.active_roll_id is None:
@@ -642,14 +647,9 @@ class OperationsPanel(ttk.Frame):
             self._handle_error("Falha ao exportar rolo.", exc)
             return
 
-        messagebox.showinfo(
-            "Exportação concluída",
-            "Exportação realizada com sucesso.\n\n"
-            f"Rolo: {result['roll_name']}\n"
-            f"PDF: {result['pdf_path']}\n"
-            f"JPG: {result['jpg_path']}",
-            parent=self,
-        )
+        result_dialog = RollExportResultDialog(self.winfo_toplevel(), result=result)
+        self.wait_window(result_dialog)
+
         self._set_status(f"Rolo exportado: {result['roll_name']}")
         self.refresh_active_roll_summary()
 

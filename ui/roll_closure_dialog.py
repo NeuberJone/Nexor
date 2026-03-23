@@ -1,0 +1,258 @@
+from __future__ import annotations
+
+import tkinter as tk
+from pathlib import Path
+from tkinter import filedialog, messagebox, ttk
+
+from application.operations_panel_service import OperationsPanelService, RollSummaryDTO
+
+
+class RollClosureDialog(tk.Toplevel):
+    """
+    Dialog de fechamento de rolo.
+
+    Objetivo:
+    - revisar os dados do rolo antes do fechamento
+    - permitir observação final
+    - opcionalmente exportar logo após fechar
+    - manter a regra de negócio no service
+    """
+
+    def __init__(
+        self,
+        master: tk.Misc,
+        *,
+        service: OperationsPanelService,
+        summary: RollSummaryDTO,
+    ) -> None:
+        super().__init__(master)
+
+        self.service = service
+        self.summary = summary
+        self.result_summary: RollSummaryDTO | None = None
+        self.export_result: dict | None = None
+
+        self.note_var = tk.StringVar(value=summary.note or "")
+        self.export_after_close_var = tk.BooleanVar(value=False)
+        self.export_dir_var = tk.StringVar(value="")
+
+        self.title("Fechamento do rolo")
+        self.resizable(False, False)
+        self.transient(master)
+        self.grab_set()
+
+        self.columnconfigure(0, weight=1)
+
+        self._build_ui()
+        self._center(master)
+
+        self.bind("<Escape>", lambda event: self.destroy())
+        self.bind("<Return>", self._on_confirm)
+
+    def _build_ui(self) -> None:
+        root = ttk.Frame(self, padding=16)
+        root.grid(row=0, column=0, sticky="nsew")
+        root.columnconfigure(0, weight=1)
+
+        self._build_header(root)
+        self._build_roll_info(root)
+        self._build_totals(root)
+        self._build_note_box(root)
+        self._build_export_options(root)
+        self._build_actions(root)
+
+    def _build_header(self, master: tk.Misc) -> None:
+        box = ttk.Frame(master)
+        box.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        box.columnconfigure(0, weight=1)
+
+        ttk.Label(
+            box,
+            text="Fechamento do rolo",
+            font=("Segoe UI", 12, "bold"),
+        ).grid(row=0, column=0, sticky="w")
+
+        ttk.Label(
+            box,
+            text="Revise os dados antes de concluir o fechamento.",
+        ).grid(row=1, column=0, sticky="w", pady=(4, 0))
+
+    def _build_roll_info(self, master: tk.Misc) -> None:
+        info = ttk.LabelFrame(master, text="Dados do rolo", padding=10)
+        info.grid(row=1, column=0, sticky="ew", pady=(0, 12))
+        info.columnconfigure(1, weight=1)
+
+        self._info_row(info, 0, "Rolo", self.summary.roll_name)
+        self._info_row(info, 1, "ID", str(self.summary.roll_id))
+        self._info_row(info, 2, "Máquina", self.summary.machine)
+        self._info_row(info, 3, "Tecido", self.summary.fabric or "-")
+        self._info_row(info, 4, "Status atual", self.summary.status)
+        self._info_row(info, 5, "Jobs", str(self.summary.jobs_count))
+
+    def _build_totals(self, master: tk.Misc) -> None:
+        box = ttk.LabelFrame(master, text="Resumo", padding=10)
+        box.grid(row=2, column=0, sticky="ew", pady=(0, 12))
+        box.columnconfigure(0, weight=1)
+        box.columnconfigure(1, weight=1)
+
+        self._metric(box, 0, 0, "Planejado", self._fmt_m(self.summary.total_planned_m))
+        self._metric(box, 0, 1, "Efetivo", self._fmt_m(self.summary.total_effective_m))
+        self._metric(box, 1, 0, "Gap", self._fmt_m(self.summary.total_gap_m))
+        self._metric(box, 1, 1, "Consumido", self._fmt_m(self.summary.total_consumed_m))
+        self._metric(box, 2, 0, "Pendentes", str(self.summary.pending_review_count))
+        self._metric(box, 2, 1, "Suspeitos", str(self.summary.suspicious_count))
+
+        if self.summary.pending_review_count > 0:
+            ttk.Label(
+                box,
+                text="Atenção: este rolo contém jobs com PENDING_REVIEW.",
+            ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(10, 0))
+
+    def _build_note_box(self, master: tk.Misc) -> None:
+        box = ttk.LabelFrame(master, text="Observação final", padding=10)
+        box.grid(row=3, column=0, sticky="ew", pady=(0, 12))
+        box.columnconfigure(0, weight=1)
+
+        ttk.Entry(box, textvariable=self.note_var).grid(row=0, column=0, sticky="ew")
+
+    def _build_export_options(self, master: tk.Misc) -> None:
+        box = ttk.LabelFrame(master, text="Exportação", padding=10)
+        box.grid(row=4, column=0, sticky="ew", pady=(0, 12))
+        box.columnconfigure(1, weight=1)
+
+        ttk.Checkbutton(
+            box,
+            text="Exportar imediatamente após fechar",
+            variable=self.export_after_close_var,
+            command=self._toggle_export_state,
+        ).grid(row=0, column=0, columnspan=3, sticky="w")
+
+        ttk.Label(box, text="Pasta:").grid(row=1, column=0, sticky="w", pady=(10, 0))
+        self.export_dir_entry = ttk.Entry(box, textvariable=self.export_dir_var, state="disabled")
+        self.export_dir_entry.grid(row=1, column=1, sticky="ew", padx=(8, 8), pady=(10, 0))
+
+        self.export_dir_button = ttk.Button(
+            box,
+            text="Selecionar",
+            command=self._choose_export_dir,
+            state="disabled",
+        )
+        self.export_dir_button.grid(row=1, column=2, sticky="e", pady=(10, 0))
+
+    def _build_actions(self, master: tk.Misc) -> None:
+        actions = ttk.Frame(master)
+        actions.grid(row=5, column=0, sticky="e")
+
+        ttk.Button(actions, text="Cancelar", command=self.destroy).pack(side="right")
+        ttk.Button(actions, text="Fechar rolo", command=self._confirm).pack(side="right", padx=(0, 8))
+
+    def _info_row(self, master: tk.Misc, row: int, label: str, value: str) -> None:
+        ttk.Label(master, text=f"{label}:").grid(row=row, column=0, sticky="nw", padx=(0, 8), pady=2)
+        ttk.Label(master, text=value).grid(row=row, column=1, sticky="w", pady=2)
+
+    def _metric(self, master: tk.Misc, row: int, col: int, label: str, value: str) -> None:
+        cell = ttk.Frame(master)
+        cell.grid(row=row, column=col, sticky="ew", padx=4, pady=4)
+        ttk.Label(cell, text=label).pack(anchor="w")
+        ttk.Label(cell, text=value, font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(2, 0))
+
+    def _toggle_export_state(self) -> None:
+        enabled = self.export_after_close_var.get()
+        state = "normal" if enabled else "disabled"
+        self.export_dir_entry.configure(state=state)
+        self.export_dir_button.configure(state=state)
+
+    def _choose_export_dir(self) -> None:
+        directory = filedialog.askdirectory(
+            title="Selecione a pasta de exportação",
+            parent=self,
+        )
+        if directory:
+            self.export_dir_var.set(directory)
+
+    def _on_confirm(self, event: tk.Event | None = None) -> None:
+        self._confirm()
+
+    def _confirm(self) -> None:
+        if self.summary.jobs_count <= 0:
+            messagebox.showwarning(
+                "Fechamento do rolo",
+                "Não é possível fechar um rolo vazio.",
+                parent=self,
+            )
+            return
+
+        export_after = self.export_after_close_var.get()
+        export_dir = self.export_dir_var.get().strip()
+
+        if export_after and not export_dir:
+            messagebox.showwarning(
+                "Fechamento do rolo",
+                "Selecione a pasta de exportação.",
+                parent=self,
+            )
+            return
+
+        if self.summary.pending_review_count > 0:
+            proceed = messagebox.askyesno(
+                "Fechamento do rolo",
+                "Este rolo possui jobs com PENDING_REVIEW.\n\nDeseja fechar mesmo assim?",
+                parent=self,
+            )
+            if not proceed:
+                return
+
+        try:
+            closed_summary = self.service.close_roll(
+                roll_id=self.summary.roll_id,
+                note=self.note_var.get().strip() or None,
+            )
+        except Exception as exc:
+            messagebox.showerror(
+                "Fechamento do rolo",
+                f"Falha ao fechar o rolo.\n\nMotivo: {exc}",
+                parent=self,
+            )
+            return
+
+        self.result_summary = closed_summary
+
+        if export_after:
+            try:
+                self.export_result = self.service.export_roll(
+                    roll_id=closed_summary.roll_id,
+                    output_dir=Path(export_dir),
+                )
+            except Exception as exc:
+                messagebox.showerror(
+                    "Fechamento do rolo",
+                    f"Rolo fechado, mas a exportação falhou.\n\nMotivo: {exc}",
+                    parent=self,
+                )
+                self.destroy()
+                return
+
+        self.destroy()
+
+    def _center(self, master: tk.Misc) -> None:
+        self.update_idletasks()
+
+        if isinstance(master, (tk.Tk, tk.Toplevel)):
+            root_x = master.winfo_rootx()
+            root_y = master.winfo_rooty()
+            root_w = master.winfo_width() or 1200
+            root_h = master.winfo_height() or 800
+        else:
+            root_x, root_y, root_w, root_h = 100, 100, 1200, 800
+
+        width = self.winfo_reqwidth()
+        height = self.winfo_reqheight()
+
+        x = root_x + max((root_w - width) // 2, 0)
+        y = root_y + max((root_h - height) // 2, 0)
+
+        self.geometry(f"+{x}+{y}")
+
+    @staticmethod
+    def _fmt_m(value: float | None) -> str:
+        return f"{float(value or 0.0):.2f} m"

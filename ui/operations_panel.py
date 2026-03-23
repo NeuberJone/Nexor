@@ -1,0 +1,821 @@
+from __future__ import annotations
+
+import tkinter as tk
+from pathlib import Path
+from tkinter import filedialog, messagebox, ttk
+from typing import Iterable
+
+from application.operations_panel_service import (
+    AvailableJobRow,
+    AvailableJobsFilters,
+    OperationsPanelService,
+    RollItemRow,
+    RollSummaryDTO,
+)
+
+
+DEFAULT_WINDOW_SIZE = "1540x900"
+SIDEBAR_WIDTH = 220
+RIGHT_PANEL_WIDTH = 360
+TREE_ROW_HEIGHT = 26
+
+
+class CreateRollDialog(tk.Toplevel):
+    def __init__(self, master: tk.Misc) -> None:
+        super().__init__(master)
+        self.title("Novo rolo")
+        self.resizable(False, False)
+        self.transient(master)
+        self.grab_set()
+
+        self.result: dict[str, str | None] | None = None
+
+        self.machine_var = tk.StringVar(value="M1")
+        self.fabric_var = tk.StringVar()
+        self.roll_name_var = tk.StringVar()
+        self.note_var = tk.StringVar()
+
+        self.columnconfigure(0, weight=1)
+        self._build_ui()
+        self._center(master)
+
+        self.bind("<Return>", self._on_confirm)
+        self.bind("<Escape>", lambda event: self.destroy())
+
+    def _build_ui(self) -> None:
+        body = ttk.Frame(self, padding=16)
+        body.grid(row=0, column=0, sticky="nsew")
+        body.columnconfigure(1, weight=1)
+
+        ttk.Label(body, text="Máquina").grid(row=0, column=0, sticky="w", padx=(0, 8), pady=(0, 8))
+        ttk.Combobox(
+            body,
+            textvariable=self.machine_var,
+            values=["M1", "M2", "CALANDRA"],
+            state="readonly",
+            width=20,
+        ).grid(row=0, column=1, sticky="ew", pady=(0, 8))
+
+        ttk.Label(body, text="Tecido").grid(row=1, column=0, sticky="w", padx=(0, 8), pady=(0, 8))
+        ttk.Entry(body, textvariable=self.fabric_var).grid(row=1, column=1, sticky="ew", pady=(0, 8))
+
+        ttk.Label(body, text="Nome do rolo").grid(row=2, column=0, sticky="w", padx=(0, 8), pady=(0, 8))
+        ttk.Entry(body, textvariable=self.roll_name_var).grid(row=2, column=1, sticky="ew", pady=(0, 8))
+
+        ttk.Label(body, text="Observação").grid(row=3, column=0, sticky="w", padx=(0, 8))
+        ttk.Entry(body, textvariable=self.note_var).grid(row=3, column=1, sticky="ew")
+
+        actions = ttk.Frame(body)
+        actions.grid(row=4, column=0, columnspan=2, sticky="e", pady=(16, 0))
+        ttk.Button(actions, text="Cancelar", command=self.destroy).pack(side="right")
+        ttk.Button(actions, text="Criar rolo", command=self._confirm).pack(side="right", padx=(0, 8))
+
+    def _center(self, master: tk.Misc) -> None:
+        self.update_idletasks()
+        if isinstance(master, (tk.Tk, tk.Toplevel)):
+            x = master.winfo_rootx()
+            y = master.winfo_rooty()
+            w = master.winfo_width() or 1200
+            h = master.winfo_height() or 800
+        else:
+            x, y, w, h = 100, 100, 1200, 800
+
+        req_w = self.winfo_reqwidth()
+        req_h = self.winfo_reqheight()
+        pos_x = x + max((w - req_w) // 2, 0)
+        pos_y = y + max((h - req_h) // 2, 0)
+        self.geometry(f"+{pos_x}+{pos_y}")
+
+    def _on_confirm(self, event: tk.Event | None = None) -> None:
+        self._confirm()
+
+    def _confirm(self) -> None:
+        machine = (self.machine_var.get() or "").strip().upper()
+        if not machine:
+            messagebox.showerror("Novo rolo", "Informe a máquina.", parent=self)
+            return
+
+        self.result = {
+            "machine": machine,
+            "fabric": (self.fabric_var.get() or "").strip() or None,
+            "roll_name": (self.roll_name_var.get() or "").strip() or None,
+            "note": (self.note_var.get() or "").strip() or None,
+        }
+        self.destroy()
+
+
+class OperationsPanel(ttk.Frame):
+    def __init__(self, master: tk.Misc, service: OperationsPanelService | None = None) -> None:
+        super().__init__(master)
+        self.master = master
+        self.service = service or OperationsPanelService()
+
+        self.active_roll_id: int | None = None
+        self.current_summary: RollSummaryDTO | None = None
+
+        self.machine_var = tk.StringVar(value="ALL")
+        self.fabric_var = tk.StringVar(value="ALL")
+        self.review_status_var = tk.StringVar(value="REVIEWED_OK")
+        self.exclude_suspicious_var = tk.BooleanVar(value=False)
+        self.search_var = tk.StringVar(value="")
+
+        self.status_var = tk.StringVar(value="Pronto.")
+        self.header_subtitle_var = tk.StringVar(value="Carregando jobs disponíveis...")
+
+        self.jobs_count_var = tk.StringVar(value="0")
+        self.roll_name_var = tk.StringVar(value="Nenhum rolo ativo")
+        self.roll_machine_var = tk.StringVar(value="-")
+        self.roll_fabric_var = tk.StringVar(value="-")
+        self.roll_status_var = tk.StringVar(value="-")
+        self.roll_jobs_var = tk.StringVar(value="0")
+        self.roll_planned_var = tk.StringVar(value="0.00 m")
+        self.roll_effective_var = tk.StringVar(value="0.00 m")
+        self.roll_gap_var = tk.StringVar(value="0.00 m")
+        self.roll_consumed_var = tk.StringVar(value="0.00 m")
+        self.roll_pending_var = tk.StringVar(value="0")
+        self.roll_ok_var = tk.StringVar(value="0")
+        self.roll_suspicious_var = tk.StringVar(value="0")
+        self.roll_note_var = tk.StringVar(value="-")
+
+        self.jobs_tree: ttk.Treeview
+        self.roll_items_tree: ttk.Treeview
+        self.machine_combo: ttk.Combobox
+        self.fabric_combo: ttk.Combobox
+        self.review_combo: ttk.Combobox
+
+        self._configure_styles()
+        self._configure_root()
+        self._build_ui()
+        self.refresh_all()
+
+    def _configure_styles(self) -> None:
+        style = ttk.Style()
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+
+        style.configure("Treeview", rowheight=TREE_ROW_HEIGHT)
+        style.configure("Sidebar.TFrame", padding=0)
+        style.configure("SidebarTitle.TLabel", font=("Segoe UI", 14, "bold"))
+        style.configure("PageTitle.TLabel", font=("Segoe UI", 16, "bold"))
+        style.configure("PageSub.TLabel", font=("Segoe UI", 10))
+        style.configure("Section.TLabelframe.Label", font=("Segoe UI", 10, "bold"))
+        style.configure("MetricLabel.TLabel", font=("Segoe UI", 9))
+        style.configure("MetricValue.TLabel", font=("Segoe UI", 11, "bold"))
+
+    def _configure_root(self) -> None:
+        if isinstance(self.master, tk.Tk):
+            self.master.title("Nexor - Operação")
+            self.master.geometry(DEFAULT_WINDOW_SIZE)
+            self.master.minsize(1320, 760)
+            self.master.columnconfigure(0, weight=1)
+            self.master.rowconfigure(0, weight=1)
+
+    def _build_ui(self) -> None:
+        self.grid(row=0, column=0, sticky="nsew")
+        self.columnconfigure(1, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        self._build_sidebar()
+        self._build_main_shell()
+
+    def _build_sidebar(self) -> None:
+        sidebar = ttk.Frame(self, style="Sidebar.TFrame", padding=(12, 12, 10, 12))
+        sidebar.grid(row=0, column=0, sticky="nsw")
+        sidebar.configure(width=SIDEBAR_WIDTH)
+        sidebar.grid_propagate(False)
+
+        ttk.Label(sidebar, text="Nexor", style="SidebarTitle.TLabel").pack(anchor="w", pady=(0, 4))
+        ttk.Label(sidebar, text="Operação local-first").pack(anchor="w", pady=(0, 16))
+
+        nav = ttk.LabelFrame(sidebar, text="Navegação", style="Section.TLabelframe", padding=8)
+        nav.pack(fill="x", pady=(0, 12))
+
+        self._nav_button(nav, "Home", enabled=False)
+        self._nav_button(nav, "Operação", enabled=True)
+        self._nav_button(nav, "Rolos", enabled=False)
+        self._nav_button(nav, "Planejamento", enabled=False)
+        self._nav_button(nav, "Estoque", enabled=False)
+        self._nav_button(nav, "Cadastros", enabled=False)
+        self._nav_button(nav, "Configurações", enabled=False)
+
+        info = ttk.LabelFrame(sidebar, text="Atalhos", style="Section.TLabelframe", padding=8)
+        info.pack(fill="x", pady=(0, 12))
+        ttk.Button(info, text="Atualizar painel", command=self.refresh_all).pack(fill="x", pady=2)
+        ttk.Button(info, text="Novo rolo", command=self.create_roll).pack(fill="x", pady=2)
+
+        state = ttk.LabelFrame(sidebar, text="Estado", style="Section.TLabelframe", padding=8)
+        state.pack(fill="both", expand=True)
+        ttk.Label(state, textvariable=self.status_var, wraplength=180, justify="left").pack(anchor="w")
+
+    def _nav_button(self, master: tk.Misc, text: str, enabled: bool) -> None:
+        state = "normal" if enabled else "disabled"
+        ttk.Button(master, text=text, state=state).pack(fill="x", pady=2)
+
+    def _build_main_shell(self) -> None:
+        shell = ttk.Frame(self, padding=(0, 0, 0, 0))
+        shell.grid(row=0, column=1, sticky="nsew")
+        shell.columnconfigure(0, weight=1)
+        shell.rowconfigure(2, weight=1)
+        shell.rowconfigure(3, weight=0)
+
+        self._build_topbar(shell)
+        self._build_filters(shell)
+        self._build_content(shell)
+        self._build_footer(shell)
+
+    def _build_topbar(self, master: tk.Misc) -> None:
+        topbar = ttk.Frame(master, padding=(12, 12, 12, 8))
+        topbar.grid(row=0, column=0, sticky="ew")
+        topbar.columnconfigure(0, weight=1)
+
+        text_box = ttk.Frame(topbar)
+        text_box.grid(row=0, column=0, sticky="w")
+
+        ttk.Label(text_box, text="Operação", style="PageTitle.TLabel").pack(anchor="w")
+        ttk.Label(text_box, textvariable=self.header_subtitle_var, style="PageSub.TLabel").pack(anchor="w", pady=(2, 0))
+
+        actions = ttk.Frame(topbar)
+        actions.grid(row=0, column=1, sticky="e")
+        ttk.Button(actions, text="Atualizar", command=self.refresh_all).pack(side="right")
+        ttk.Button(actions, text="Limpar filtros", command=self.clear_filters).pack(side="right", padx=(0, 8))
+
+    def _build_filters(self, master: tk.Misc) -> None:
+        bar = ttk.LabelFrame(master, text="Filtros", style="Section.TLabelframe", padding=10)
+        bar.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 8))
+        for col in range(9):
+            bar.columnconfigure(col, weight=1 if col in {1, 3, 5, 7} else 0)
+
+        ttk.Label(bar, text="Máquina").grid(row=0, column=0, sticky="w", padx=(0, 6))
+        self.machine_combo = ttk.Combobox(bar, textvariable=self.machine_var, state="readonly")
+        self.machine_combo.grid(row=0, column=1, sticky="ew", padx=(0, 12))
+
+        ttk.Label(bar, text="Tecido").grid(row=0, column=2, sticky="w", padx=(0, 6))
+        self.fabric_combo = ttk.Combobox(bar, textvariable=self.fabric_var, state="readonly")
+        self.fabric_combo.grid(row=0, column=3, sticky="ew", padx=(0, 12))
+
+        ttk.Label(bar, text="Review").grid(row=0, column=4, sticky="w", padx=(0, 6))
+        self.review_combo = ttk.Combobox(bar, textvariable=self.review_status_var, state="readonly")
+        self.review_combo.grid(row=0, column=5, sticky="ew", padx=(0, 12))
+
+        ttk.Label(bar, text="Busca").grid(row=0, column=6, sticky="w", padx=(0, 6))
+        ttk.Entry(bar, textvariable=self.search_var).grid(row=0, column=7, sticky="ew", padx=(0, 12))
+
+        ttk.Checkbutton(
+            bar,
+            text="Excluir suspeitos",
+            variable=self.exclude_suspicious_var,
+        ).grid(row=0, column=8, sticky="w")
+
+        actions = ttk.Frame(bar)
+        actions.grid(row=1, column=0, columnspan=9, sticky="e", pady=(10, 0))
+        ttk.Button(actions, text="Aplicar filtros", command=self.refresh_jobs).pack(side="right")
+
+    def _build_content(self, master: tk.Misc) -> None:
+        content = ttk.Frame(master)
+        content.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 8))
+        content.columnconfigure(0, weight=1)
+        content.columnconfigure(1, weight=0)
+        content.rowconfigure(0, weight=1)
+
+        self._build_jobs_area(content)
+        self._build_roll_panel(content)
+
+    def _build_jobs_area(self, master: tk.Misc) -> None:
+        panel = ttk.LabelFrame(master, text="Jobs disponíveis", style="Section.TLabelframe", padding=8)
+        panel.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        panel.columnconfigure(0, weight=1)
+        panel.rowconfigure(1, weight=1)
+
+        summary = ttk.Frame(panel)
+        summary.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        ttk.Label(summary, text="Itens visíveis:").pack(side="left")
+        ttk.Label(summary, textvariable=self.jobs_count_var, style="MetricValue.TLabel").pack(side="left", padx=(6, 0))
+
+        tree_wrap = ttk.Frame(panel)
+        tree_wrap.grid(row=1, column=0, sticky="nsew")
+        tree_wrap.columnconfigure(0, weight=1)
+        tree_wrap.rowconfigure(0, weight=1)
+
+        self.jobs_tree = ttk.Treeview(
+            tree_wrap,
+            columns=("row_id", "job_id", "machine", "fabric", "review", "document", "effective", "gap", "consumed", "sus"),
+            show="headings",
+            selectmode="browse",
+        )
+        self.jobs_tree.grid(row=0, column=0, sticky="nsew")
+        self.jobs_tree.bind("<Double-1>", lambda event: self.add_selected_job_to_active_roll())
+
+        sb_y = ttk.Scrollbar(tree_wrap, orient="vertical", command=self.jobs_tree.yview)
+        sb_y.grid(row=0, column=1, sticky="ns")
+        sb_x = ttk.Scrollbar(tree_wrap, orient="horizontal", command=self.jobs_tree.xview)
+        sb_x.grid(row=1, column=0, sticky="ew")
+        self.jobs_tree.configure(yscrollcommand=sb_y.set, xscrollcommand=sb_x.set)
+
+        self._configure_jobs_tree()
+
+        actions = ttk.Frame(panel)
+        actions.grid(row=2, column=0, sticky="ew", pady=(8, 0))
+        ttk.Button(actions, text="Adicionar ao rolo ativo", command=self.add_selected_job_to_active_roll).pack(side="left")
+        ttk.Button(actions, text="Atualizar jobs", command=self.refresh_jobs).pack(side="left", padx=(8, 0))
+
+    def _build_roll_panel(self, master: tk.Misc) -> None:
+        panel = ttk.LabelFrame(master, text="Rolo em montagem", style="Section.TLabelframe", padding=8)
+        panel.grid(row=0, column=1, sticky="nsew")
+        panel.configure(width=RIGHT_PANEL_WIDTH)
+        panel.grid_propagate(False)
+        panel.columnconfigure(0, weight=1)
+        panel.rowconfigure(2, weight=1)
+
+        header = ttk.Frame(panel)
+        header.grid(row=0, column=0, sticky="ew")
+        header.columnconfigure(0, weight=1)
+
+        ttk.Label(header, textvariable=self.roll_name_var, style="MetricValue.TLabel", wraplength=300).grid(
+            row=0, column=0, sticky="w"
+        )
+        btns = ttk.Frame(header)
+        btns.grid(row=0, column=1, sticky="e")
+        ttk.Button(btns, text="Novo rolo", command=self.create_roll).pack(side="left")
+        ttk.Button(btns, text="Fechar", command=self.close_active_roll).pack(side="left", padx=(6, 0))
+
+        meta = ttk.Frame(panel)
+        meta.grid(row=1, column=0, sticky="ew", pady=(10, 8))
+        meta.columnconfigure(1, weight=1)
+
+        self._meta_row(meta, 0, "Máquina", self.roll_machine_var)
+        self._meta_row(meta, 1, "Tecido", self.roll_fabric_var)
+        self._meta_row(meta, 2, "Status", self.roll_status_var)
+        self._meta_row(meta, 3, "Observação", self.roll_note_var)
+
+        items_box = ttk.LabelFrame(panel, text="Itens do rolo", style="Section.TLabelframe", padding=6)
+        items_box.grid(row=2, column=0, sticky="nsew", pady=(0, 8))
+        items_box.columnconfigure(0, weight=1)
+        items_box.rowconfigure(0, weight=1)
+
+        self.roll_items_tree = ttk.Treeview(
+            items_box,
+            columns=("row_id", "job_id", "fabric", "review", "consumed"),
+            show="headings",
+            selectmode="browse",
+            height=12,
+        )
+        self.roll_items_tree.grid(row=0, column=0, sticky="nsew")
+
+        sb = ttk.Scrollbar(items_box, orient="vertical", command=self.roll_items_tree.yview)
+        sb.grid(row=0, column=1, sticky="ns")
+        self.roll_items_tree.configure(yscrollcommand=sb.set)
+
+        self._configure_roll_items_tree()
+
+        metrics = ttk.LabelFrame(panel, text="Resumo", style="Section.TLabelframe", padding=8)
+        metrics.grid(row=3, column=0, sticky="ew", pady=(0, 8))
+        metrics.columnconfigure(0, weight=1)
+        metrics.columnconfigure(1, weight=1)
+
+        self._metric(metrics, 0, 0, "Jobs", self.roll_jobs_var)
+        self._metric(metrics, 0, 1, "Planejado", self.roll_planned_var)
+        self._metric(metrics, 1, 0, "Efetivo", self.roll_effective_var)
+        self._metric(metrics, 1, 1, "Gap", self.roll_gap_var)
+        self._metric(metrics, 2, 0, "Consumido", self.roll_consumed_var)
+        self._metric(metrics, 2, 1, "Pendentes", self.roll_pending_var)
+        self._metric(metrics, 3, 0, "Revisados OK", self.roll_ok_var)
+        self._metric(metrics, 3, 1, "Suspeitos", self.roll_suspicious_var)
+
+        actions = ttk.Frame(panel)
+        actions.grid(row=4, column=0, sticky="ew")
+        actions.columnconfigure(0, weight=1)
+        actions.columnconfigure(1, weight=1)
+
+        ttk.Button(actions, text="Remover item", command=self.remove_selected_item_from_roll).grid(row=0, column=0, sticky="ew")
+        ttk.Button(actions, text="Exportar rolo", command=self.export_active_roll).grid(row=0, column=1, sticky="ew", padx=(8, 0))
+        ttk.Button(actions, text="Atualizar resumo", command=self.refresh_active_roll_summary).grid(
+            row=1, column=0, sticky="ew", pady=(8, 0)
+        )
+        ttk.Button(actions, text="Ver detalhes", command=self.show_roll_detail_dialog).grid(
+            row=1, column=1, sticky="ew", padx=(8, 0), pady=(8, 0)
+        )
+
+    def _build_footer(self, master: tk.Misc) -> None:
+        footer = ttk.Frame(master, padding=(12, 0, 12, 10))
+        footer.grid(row=3, column=0, sticky="ew")
+        footer.columnconfigure(0, weight=1)
+        ttk.Separator(footer, orient="horizontal").grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        ttk.Label(footer, textvariable=self.status_var).grid(row=1, column=0, sticky="w")
+
+    def _meta_row(self, master: tk.Misc, row: int, label: str, var: tk.StringVar) -> None:
+        ttk.Label(master, text=f"{label}:").grid(row=row, column=0, sticky="nw", padx=(0, 8), pady=2)
+        ttk.Label(master, textvariable=var, wraplength=250, justify="left").grid(row=row, column=1, sticky="ew", pady=2)
+
+    def _metric(self, master: tk.Misc, row: int, col: int, label: str, var: tk.StringVar) -> None:
+        box = ttk.Frame(master)
+        box.grid(row=row, column=col, sticky="ew", padx=4, pady=4)
+        ttk.Label(box, text=label, style="MetricLabel.TLabel").pack(anchor="w")
+        ttk.Label(box, textvariable=var, style="MetricValue.TLabel").pack(anchor="w")
+
+    def _configure_jobs_tree(self) -> None:
+        spec = {
+            "row_id": ("ID", 70),
+            "job_id": ("Job", 90),
+            "machine": ("Máquina", 90),
+            "fabric": ("Tecido", 120),
+            "review": ("Review", 120),
+            "document": ("Documento", 380),
+            "effective": ("Efetivo (m)", 100),
+            "gap": ("Gap (m)", 90),
+            "consumed": ("Consumido (m)", 115),
+            "sus": ("Suspeito", 90),
+        }
+        for col, (title, width) in spec.items():
+            self.jobs_tree.heading(col, text=title)
+            anchor = "w" if col in {"fabric", "review", "document"} else "center"
+            self.jobs_tree.column(col, width=width, minwidth=width, anchor=anchor)
+
+    def _configure_roll_items_tree(self) -> None:
+        spec = {
+            "row_id": ("ID", 60),
+            "job_id": ("Job", 80),
+            "fabric": ("Tecido", 110),
+            "review": ("Review", 105),
+            "consumed": ("Cons. (m)", 85),
+        }
+        for col, (title, width) in spec.items():
+            self.roll_items_tree.heading(col, text=title)
+            anchor = "w" if col in {"fabric", "review"} else "center"
+            self.roll_items_tree.column(col, width=width, minwidth=width, anchor=anchor)
+
+    def clear_filters(self) -> None:
+        self.machine_var.set("ALL")
+        self.fabric_var.set("ALL")
+        self.review_status_var.set("REVIEWED_OK")
+        self.exclude_suspicious_var.set(False)
+        self.search_var.set("")
+        self.refresh_jobs()
+
+    def refresh_all(self) -> None:
+        self._set_status("Atualizando painel...")
+        try:
+            self._load_filter_values()
+            self.refresh_jobs()
+            self.refresh_active_roll_summary()
+            self._set_status("Painel atualizado.")
+        except Exception as exc:
+            self._handle_error("Falha ao atualizar o painel.", exc)
+
+    def _load_filter_values(self) -> None:
+        values = self.service.get_filter_values()
+
+        machine_values = ["ALL", *values.get("machines", [])]
+        fabric_values = ["ALL", *values.get("fabrics", [])]
+        review_values = ["ALL", *values.get("review_statuses", [])]
+
+        self.machine_combo["values"] = machine_values
+        self.fabric_combo["values"] = fabric_values
+        self.review_combo["values"] = review_values
+
+        if self.machine_var.get() not in machine_values:
+            self.machine_var.set("ALL")
+        if self.fabric_var.get() not in fabric_values:
+            self.fabric_var.set("ALL")
+        if self.review_status_var.get() not in review_values:
+            self.review_status_var.set("REVIEWED_OK" if "REVIEWED_OK" in review_values else "ALL")
+
+    def refresh_jobs(self) -> None:
+        filters = AvailableJobsFilters(
+            machine=self._none_if_all(self.machine_var.get()),
+            fabric=self._none_if_all(self.fabric_var.get()),
+            review_status=self._none_if_all(self.review_status_var.get()),
+            exclude_suspicious=self.exclude_suspicious_var.get(),
+            limit=None,
+        )
+
+        jobs = self.service.list_available_jobs(filters)
+        jobs = self._apply_text_search(jobs, self.search_var.get())
+        self._populate_jobs_tree(jobs)
+
+        self.jobs_count_var.set(str(len(jobs)))
+        self.header_subtitle_var.set(f"{len(jobs)} job(s) disponível(is) para montagem")
+        self._set_status(f"Jobs carregados: {len(jobs)}")
+
+    def refresh_active_roll_summary(self) -> None:
+        open_rolls = self.service.list_open_rolls()
+
+        if not open_rolls:
+            self.active_roll_id = None
+            self.current_summary = None
+            self._clear_roll_panel()
+            self._set_status("Nenhum rolo aberto.")
+            return
+
+        available_ids = {r.roll_id for r in open_rolls}
+        if self.active_roll_id not in available_ids:
+            self.active_roll_id = open_rolls[0].roll_id
+
+        summary = self.service.get_roll_summary(self.active_roll_id)
+        self.current_summary = summary
+        self._apply_summary(summary)
+
+    def create_roll(self) -> None:
+        dialog = CreateRollDialog(self.winfo_toplevel())
+        self.wait_window(dialog)
+        if not dialog.result:
+            return
+
+        try:
+            summary = self.service.create_roll(
+                machine=str(dialog.result["machine"]),
+                fabric=dialog.result["fabric"],
+                note=dialog.result["note"],
+                roll_name=dialog.result["roll_name"],
+            )
+        except Exception as exc:
+            self._handle_error("Falha ao criar rolo.", exc)
+            return
+
+        self.active_roll_id = summary.roll_id
+        self.current_summary = summary
+        self._apply_summary(summary)
+        self._set_status(f"Rolo criado: {summary.roll_name}")
+
+    def add_selected_job_to_active_roll(self) -> None:
+        if self.active_roll_id is None:
+            messagebox.showwarning("Operação", "Crie ou selecione um rolo ativo primeiro.", parent=self)
+            return
+
+        job_row_id = self._get_selected_tree_row_id(self.jobs_tree)
+        if job_row_id is None:
+            messagebox.showwarning("Operação", "Selecione um job para adicionar.", parent=self)
+            return
+
+        try:
+            summary = self.service.add_job_to_roll(roll_id=self.active_roll_id, job_row_id=job_row_id)
+        except Exception as exc:
+            self._handle_error("Falha ao adicionar job ao rolo.", exc)
+            return
+
+        self.current_summary = summary
+        self._apply_summary(summary)
+        self.refresh_jobs()
+        self._set_status(f"Job {job_row_id} adicionado ao rolo {summary.roll_name}.")
+
+        if summary.pending_review_count > 0:
+            messagebox.showwarning(
+                "Atenção",
+                "O rolo ativo contém jobs com PENDING_REVIEW.\n\n"
+                "No MVP eles continuam permitidos, mas devem ficar visíveis.",
+                parent=self,
+            )
+
+    def remove_selected_item_from_roll(self) -> None:
+        if self.active_roll_id is None:
+            messagebox.showwarning("Operação", "Nenhum rolo ativo selecionado.", parent=self)
+            return
+
+        job_row_id = self._get_selected_tree_row_id(self.roll_items_tree)
+        if job_row_id is None:
+            messagebox.showwarning("Operação", "Selecione um item do rolo para remover.", parent=self)
+            return
+
+        confirm = messagebox.askyesno(
+            "Remover item",
+            f"Deseja remover o item {job_row_id} do rolo ativo?",
+            parent=self,
+        )
+        if not confirm:
+            return
+
+        try:
+            summary = self.service.remove_job_from_roll(roll_id=self.active_roll_id, job_row_id=job_row_id)
+        except Exception as exc:
+            self._handle_error("Falha ao remover item do rolo.", exc)
+            return
+
+        self.current_summary = summary
+        self._apply_summary(summary)
+        self.refresh_jobs()
+        self._set_status(f"Item {job_row_id} removido do rolo {summary.roll_name}.")
+
+    def close_active_roll(self) -> None:
+        if self.active_roll_id is None:
+            messagebox.showwarning("Fechar rolo", "Nenhum rolo ativo selecionado.", parent=self)
+            return
+
+        summary = self.current_summary
+        if summary and summary.jobs_count <= 0:
+            messagebox.showwarning("Fechar rolo", "Não é possível fechar um rolo vazio.", parent=self)
+            return
+
+        if summary and summary.pending_review_count > 0:
+            text = "Este rolo possui jobs com PENDING_REVIEW.\n\nDeseja fechar mesmo assim?"
+        else:
+            text = "Deseja fechar o rolo ativo?"
+
+        proceed = messagebox.askyesno("Fechar rolo", text, parent=self)
+        if not proceed:
+            return
+
+        try:
+            closed = self.service.close_roll(roll_id=self.active_roll_id)
+        except Exception as exc:
+            self._handle_error("Falha ao fechar o rolo.", exc)
+            return
+
+        messagebox.showinfo("Rolo fechado", f"Rolo fechado com sucesso:\n{closed.roll_name}", parent=self)
+        self.current_summary = closed
+        self.refresh_jobs()
+        self.refresh_active_roll_summary()
+        self._set_status(f"Rolo fechado: {closed.roll_name}")
+
+    def export_active_roll(self) -> None:
+        if self.active_roll_id is None:
+            messagebox.showwarning("Exportar rolo", "Nenhum rolo ativo selecionado.", parent=self)
+            return
+
+        directory = filedialog.askdirectory(title="Selecione a pasta de exportação", parent=self)
+        if not directory:
+            return
+
+        try:
+            result = self.service.export_roll(roll_id=self.active_roll_id, output_dir=Path(directory))
+        except Exception as exc:
+            self._handle_error("Falha ao exportar rolo.", exc)
+            return
+
+        messagebox.showinfo(
+            "Exportação concluída",
+            "Exportação realizada com sucesso.\n\n"
+            f"Rolo: {result['roll_name']}\n"
+            f"PDF: {result['pdf_path']}\n"
+            f"JPG: {result['jpg_path']}",
+            parent=self,
+        )
+        self._set_status(f"Rolo exportado: {result['roll_name']}")
+        self.refresh_active_roll_summary()
+
+    def show_roll_detail_dialog(self) -> None:
+        if self.current_summary is None:
+            messagebox.showinfo("Detalhes", "Nenhum rolo ativo carregado.", parent=self)
+            return
+
+        s = self.current_summary
+        text = (
+            f"Rolo: {s.roll_name}\n"
+            f"ID: {s.roll_id}\n"
+            f"Status: {s.status}\n"
+            f"Máquina: {s.machine}\n"
+            f"Tecido: {s.fabric or '-'}\n"
+            f"Jobs: {s.jobs_count}\n"
+            f"Planejado: {self._fmt_m(s.total_planned_m)}\n"
+            f"Efetivo: {self._fmt_m(s.total_effective_m)}\n"
+            f"Gap: {self._fmt_m(s.total_gap_m)}\n"
+            f"Consumido: {self._fmt_m(s.total_consumed_m)}\n"
+            f"Pendentes: {s.pending_review_count}\n"
+            f"Revisados OK: {s.reviewed_ok_count}\n"
+            f"Suspeitos: {s.suspicious_count}\n"
+            f"Observação: {s.note or '-'}"
+        )
+        messagebox.showinfo("Detalhes do rolo", text, parent=self)
+
+    def _apply_summary(self, summary: RollSummaryDTO) -> None:
+        self.roll_name_var.set(f"{summary.roll_name} (ID {summary.roll_id})")
+        self.roll_machine_var.set(summary.machine)
+        self.roll_fabric_var.set(summary.fabric or "-")
+        self.roll_status_var.set(summary.status)
+        self.roll_note_var.set(summary.note or "-")
+
+        self.roll_jobs_var.set(str(summary.jobs_count))
+        self.roll_planned_var.set(self._fmt_m(summary.total_planned_m))
+        self.roll_effective_var.set(self._fmt_m(summary.total_effective_m))
+        self.roll_gap_var.set(self._fmt_m(summary.total_gap_m))
+        self.roll_consumed_var.set(self._fmt_m(summary.total_consumed_m))
+        self.roll_pending_var.set(str(summary.pending_review_count))
+        self.roll_ok_var.set(str(summary.reviewed_ok_count))
+        self.roll_suspicious_var.set(str(summary.suspicious_count))
+
+        self._populate_roll_items_tree(summary.items)
+
+    def _clear_roll_panel(self) -> None:
+        self.roll_name_var.set("Nenhum rolo ativo")
+        self.roll_machine_var.set("-")
+        self.roll_fabric_var.set("-")
+        self.roll_status_var.set("-")
+        self.roll_note_var.set("-")
+        self.roll_jobs_var.set("0")
+        self.roll_planned_var.set("0.00 m")
+        self.roll_effective_var.set("0.00 m")
+        self.roll_gap_var.set("0.00 m")
+        self.roll_consumed_var.set("0.00 m")
+        self.roll_pending_var.set("0")
+        self.roll_ok_var.set("0")
+        self.roll_suspicious_var.set("0")
+        self._populate_roll_items_tree([])
+
+    def _populate_jobs_tree(self, jobs: Iterable[AvailableJobRow]) -> None:
+        self._clear_tree(self.jobs_tree)
+        for row in jobs:
+            self.jobs_tree.insert(
+                "",
+                "end",
+                values=(
+                    row.row_id,
+                    row.job_id,
+                    row.machine,
+                    row.fabric or "-",
+                    row.review_status or "-",
+                    row.document,
+                    self._fmt_num(row.effective_printed_length_m),
+                    self._fmt_num(row.gap_before_m),
+                    self._fmt_num(row.consumed_length_m),
+                    "SIM" if row.is_suspicious else "-",
+                ),
+            )
+
+    def _populate_roll_items_tree(self, items: Iterable[RollItemRow]) -> None:
+        self._clear_tree(self.roll_items_tree)
+        for item in items:
+            self.roll_items_tree.insert(
+                "",
+                "end",
+                values=(
+                    item.row_id or "-",
+                    item.job_id,
+                    item.fabric or "-",
+                    item.review_status or "-",
+                    self._fmt_num(item.consumed_length_m),
+                ),
+            )
+
+    def _apply_text_search(self, jobs: list[AvailableJobRow], text: str) -> list[AvailableJobRow]:
+        term = (text or "").strip().lower()
+        if not term:
+            return jobs
+
+        out: list[AvailableJobRow] = []
+        for row in jobs:
+            hay = " ".join(
+                [
+                    str(row.job_id),
+                    str(row.machine),
+                    str(row.fabric or ""),
+                    str(row.review_status or ""),
+                    str(row.document or ""),
+                    str(row.suspicion_reason or ""),
+                ]
+            ).lower()
+            if term in hay:
+                out.append(row)
+        return out
+
+    def _get_selected_tree_row_id(self, tree: ttk.Treeview) -> int | None:
+        selection = tree.selection()
+        if not selection:
+            return None
+        values = tree.item(selection[0], "values")
+        if not values:
+            return None
+        try:
+            return int(values[0])
+        except (TypeError, ValueError):
+            return None
+
+    def _set_status(self, text: str) -> None:
+        self.status_var.set(text)
+
+    def _handle_error(self, message: str, exc: Exception) -> None:
+        self._set_status(f"Erro: {exc}")
+        messagebox.showerror("Nexor", f"{message}\n\nMotivo: {exc}", parent=self)
+
+    @staticmethod
+    def _clear_tree(tree: ttk.Treeview) -> None:
+        for item in tree.get_children():
+            tree.delete(item)
+
+    @staticmethod
+    def _none_if_all(value: str | None) -> str | None:
+        text = (value or "").strip()
+        if not text or text.upper() == "ALL":
+            return None
+        return text
+
+    @staticmethod
+    def _fmt_num(value: float | None) -> str:
+        return f"{float(value or 0.0):.2f}"
+
+    @staticmethod
+    def _fmt_m(value: float | None) -> str:
+        return f"{float(value or 0.0):.2f} m"
+
+
+def run_operations_panel(service: OperationsPanelService | None = None) -> None:
+    root = tk.Tk()
+    OperationsPanel(root, service=service)
+    root.mainloop()
+
+
+def main() -> None:
+    run_operations_panel()
+
+
+if __name__ == "__main__":
+    main()

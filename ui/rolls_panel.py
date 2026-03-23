@@ -8,6 +8,7 @@ from typing import Iterable
 from application.operations_panel_service import (
     OpenRollRow,
     OperationsPanelService,
+    RollListFilters,
     RollSummaryDTO,
 )
 from ui.roll_export_result_dialog import RollExportResultDialog
@@ -26,10 +27,6 @@ class RollsPanel(ttk.Frame):
     - filtrar por status/máquina/busca
     - inspecionar detalhes
     - exportar novamente quando aplicável
-
-    Importante:
-    - a UI não acessa repository diretamente
-    - depende da application layer para listagem e resumo
     """
 
     def __init__(self, master: tk.Misc, service: OperationsPanelService | None = None) -> None:
@@ -117,6 +114,7 @@ class RollsPanel(ttk.Frame):
         actions = ttk.Frame(header)
         actions.grid(row=0, column=1, sticky="e")
         ttk.Button(actions, text="Atualizar", command=self.refresh_all).pack(side="right")
+        ttk.Button(actions, text="Limpar filtros", command=self.clear_filters).pack(side="right", padx=(0, 8))
 
     def _build_left_panel(self) -> None:
         panel = ttk.LabelFrame(self, text="Lista de rolos", style="Section.TLabelframe")
@@ -283,6 +281,12 @@ class RollsPanel(ttk.Frame):
             anchor = "w" if col in {"fabric", "review"} else "center"
             self.items_tree.column(col, width=width, minwidth=width, anchor=anchor)
 
+    def clear_filters(self) -> None:
+        self.status_var.set("ALL")
+        self.machine_var.set("ALL")
+        self.search_var.set("")
+        self.refresh_rolls()
+
     def refresh_all(self) -> None:
         self._set_status("Atualizando rolos...")
         try:
@@ -293,53 +297,28 @@ class RollsPanel(ttk.Frame):
             self._handle_error("Falha ao atualizar painel de rolos.", exc)
 
     def _load_filter_values(self) -> None:
-        """
-        Mantido conservador.
-        Usa list_open_rolls() quando list_rolls() ainda não existir.
-        O ajuste correto depois é expandir a application layer.
-        """
-        status_values = ["ALL", "OPEN"]
+        values = self.service.get_roll_filter_values()
 
-        machines = set()
-        try:
-            for row in self._safe_list_rolls(status=None):
-                if row.machine:
-                    machines.add(row.machine)
-        except Exception:
-            pass
+        status_values = ["ALL", *values.get("statuses", [])]
+        machine_values = ["ALL", *values.get("machines", [])]
 
         self.status_combo["values"] = status_values
-        self.machine_combo["values"] = ["ALL", *sorted(machines)]
+        self.machine_combo["values"] = machine_values
 
         if self.status_var.get() not in status_values:
             self.status_var.set("ALL")
-        if self.machine_var.get() not in self.machine_combo["values"]:
+        if self.machine_var.get() not in machine_values:
             self.machine_var.set("ALL")
 
     def refresh_rolls(self) -> None:
-        status = self._none_if_all(self.status_var.get())
-        machine = self._none_if_all(self.machine_var.get())
-        search = (self.search_var.get() or "").strip().lower()
+        filters = RollListFilters(
+            status=self._none_if_all(self.status_var.get()),
+            machine=self._none_if_all(self.machine_var.get()),
+            search=(self.search_var.get() or "").strip() or None,
+            limit=None,
+        )
 
-        rows = self._safe_list_rolls(status=status)
-
-        if machine:
-            rows = [row for row in rows if (row.machine or "").strip().upper() == machine.strip().upper()]
-
-        if search:
-            rows = [
-                row for row in rows
-                if search in " ".join(
-                    [
-                        str(row.roll_id),
-                        str(row.roll_name or ""),
-                        str(row.machine or ""),
-                        str(row.fabric or ""),
-                        str(row.status or ""),
-                    ]
-                ).lower()
-            ]
-
+        rows = self.service.list_rolls(filters)
         self._populate_rolls_tree(rows)
         self.rolls_count_var.set(str(len(rows)))
         self._set_status(f"Rolos carregados: {len(rows)}")
@@ -415,16 +394,6 @@ class RollsPanel(ttk.Frame):
             f"Observação: {s.note or '-'}"
         )
         messagebox.showinfo("Detalhes do rolo", text, parent=self)
-
-    def _safe_list_rolls(self, status: str | None) -> list[OpenRollRow]:
-        """
-        Compatibilidade de transição:
-        - se o service já tiver list_rolls(...), usa ele
-        - senão, cai para list_open_rolls() sem quebrar a UI
-        """
-        if hasattr(self.service, "list_rolls"):
-            return self.service.list_rolls(status=status)  # type: ignore[attr-defined]
-        return self.service.list_open_rolls()
 
     def _populate_rolls_tree(self, rows: Iterable[OpenRollRow]) -> None:
         self._clear_tree(self.rolls_tree)

@@ -13,18 +13,18 @@ APP_TITLE = "Nexor"
 DEFAULT_WINDOW_SIZE = "1540x900"
 MIN_WIDTH = 1360
 MIN_HEIGHT = 780
-SIDEBAR_WIDTH = 220
+SIDEBAR_WIDTH = 130
 
 
 class MainWindow(ttk.Frame):
     """
-    Janela principal do Nexor.
+    Shell principal do Nexor.
 
-    Responsabilidades:
-    - manter um shell único da aplicação
-    - oferecer navegação lateral consistente
-    - trocar a área central entre páginas
-    - compartilhar uma única instância de service
+    Regras:
+    - sidebar pertence ao shell
+    - topbar pertence ao shell
+    - footer/status pertence ao shell
+    - páginas internas são content-only
     """
 
     def __init__(self, master: tk.Misc, service: OperationsPanelService | None = None) -> None:
@@ -55,14 +55,12 @@ class MainWindow(ttk.Frame):
 
         style.configure("Sidebar.TFrame", padding=0)
         style.configure("SidebarTitle.TLabel", font=("Segoe UI", 14, "bold"))
+        style.configure("SidebarSub.TLabel", font=("Segoe UI", 9))
         style.configure("ShellTitle.TLabel", font=("Segoe UI", 16, "bold"))
         style.configure("ShellSubtitle.TLabel", font=("Segoe UI", 10))
-        style.configure("Nav.TButton", anchor="w", padding=(10, 8))
-        style.configure("NavActive.TButton", anchor="w", padding=(10, 8))
-        style.map(
-            "NavActive.TButton",
-            relief=[("!disabled", "solid")],
-        )
+        style.configure("Nav.TButton", anchor="center", padding=(10, 8))
+        style.configure("NavActive.TButton", anchor="center", padding=(10, 8))
+        style.map("NavActive.TButton", relief=[("!disabled", "solid")])
 
     def _configure_root(self) -> None:
         if isinstance(self.master, tk.Tk):
@@ -81,16 +79,18 @@ class MainWindow(ttk.Frame):
         self._build_shell()
 
     def _build_sidebar(self) -> None:
-        sidebar = ttk.Frame(self, style="Sidebar.TFrame", padding=(12, 12, 10, 12))
+        sidebar = ttk.Frame(self, style="Sidebar.TFrame", padding=(8, 12, 8, 12))
         sidebar.grid(row=0, column=0, sticky="nsw")
         sidebar.configure(width=SIDEBAR_WIDTH)
         sidebar.grid_propagate(False)
 
-        ttk.Label(sidebar, text="Nexor", style="SidebarTitle.TLabel").pack(anchor="w", pady=(0, 4))
-        ttk.Label(sidebar, text="Operação local-first").pack(anchor="w", pady=(0, 16))
+        brand = ttk.Frame(sidebar)
+        brand.pack(fill="x", pady=(0, 16))
+        ttk.Label(brand, text="Nexor", style="SidebarTitle.TLabel").pack(anchor="w")
+        ttk.Label(brand, text="Operação local-first", style="SidebarSub.TLabel").pack(anchor="w", pady=(4, 0))
 
         nav = ttk.LabelFrame(sidebar, text="Navegação", padding=8)
-        nav.pack(fill="x", pady=(0, 12))
+        nav.pack(fill="x")
 
         self.nav_buttons["home"] = ttk.Button(
             nav,
@@ -121,20 +121,8 @@ class MainWindow(ttk.Frame):
         ttk.Button(nav, text="Cadastros", state="disabled", style="Nav.TButton").pack(fill="x", pady=2)
         ttk.Button(nav, text="Configurações", state="disabled", style="Nav.TButton").pack(fill="x", pady=2)
 
-        quick = ttk.LabelFrame(sidebar, text="Ações rápidas", padding=8)
-        quick.pack(fill="x", pady=(0, 12))
-
-        ttk.Button(quick, text="Ir para Home", command=lambda: self.show_page("home")).pack(fill="x", pady=2)
-        ttk.Button(quick, text="Ir para Operação", command=lambda: self.show_page("operations")).pack(fill="x", pady=2)
-        ttk.Button(quick, text="Ir para Rolos", command=lambda: self.show_page("rolls")).pack(fill="x", pady=2)
-        ttk.Button(quick, text="Atualizar página", command=self.refresh_current_page).pack(fill="x", pady=2)
-
-        status_box = ttk.LabelFrame(sidebar, text="Estado", padding=8)
-        status_box.pack(fill="both", expand=True)
-        ttk.Label(status_box, textvariable=self.status_var, wraplength=180, justify="left").pack(anchor="w")
-
     def _build_shell(self) -> None:
-        shell = ttk.Frame(self)
+        shell = ttk.Frame(self, padding=(12, 12, 12, 10))
         shell.grid(row=0, column=1, sticky="nsew")
         shell.columnconfigure(0, weight=1)
         shell.rowconfigure(1, weight=1)
@@ -144,31 +132,29 @@ class MainWindow(ttk.Frame):
         self._build_footer(shell)
 
     def _build_topbar(self, master: tk.Misc) -> None:
-        topbar = ttk.Frame(master, padding=(12, 12, 12, 8))
-        topbar.grid(row=0, column=0, sticky="ew")
+        topbar = ttk.Frame(master)
+        topbar.grid(row=0, column=0, sticky="ew", pady=(0, 10))
         topbar.columnconfigure(0, weight=1)
 
         text_box = ttk.Frame(topbar)
         text_box.grid(row=0, column=0, sticky="w")
 
         ttk.Label(text_box, textvariable=self.page_title_var, style="ShellTitle.TLabel").pack(anchor="w")
-        ttk.Label(text_box, textvariable=self.page_subtitle_var, style="ShellSubtitle.TLabel").pack(
-            anchor="w", pady=(2, 0)
-        )
+        ttk.Label(text_box, textvariable=self.page_subtitle_var, style="ShellSubtitle.TLabel").pack(anchor="w", pady=(4, 0))
 
         actions = ttk.Frame(topbar)
         actions.grid(row=0, column=1, sticky="e")
         ttk.Button(actions, text="Atualizar página", command=self.refresh_current_page).pack(side="right")
 
     def _build_content_area(self, master: tk.Misc) -> None:
-        self.content = ttk.Frame(master, padding=(12, 0, 12, 8))
+        self.content = ttk.Frame(master)
         self.content.grid(row=1, column=0, sticky="nsew")
         self.content.columnconfigure(0, weight=1)
         self.content.rowconfigure(0, weight=1)
 
     def _build_footer(self, master: tk.Misc) -> None:
-        footer = ttk.Frame(master, padding=(12, 0, 12, 10))
-        footer.grid(row=2, column=0, sticky="ew")
+        footer = ttk.Frame(master)
+        footer.grid(row=2, column=0, sticky="ew", pady=(10, 0))
         footer.columnconfigure(0, weight=1)
 
         ttk.Separator(footer, orient="horizontal").grid(row=0, column=0, sticky="ew", pady=(0, 6))

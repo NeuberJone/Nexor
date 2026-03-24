@@ -16,8 +16,6 @@ from ui.roll_closure_dialog import RollClosureDialog
 from ui.roll_export_result_dialog import RollExportResultDialog
 
 
-DEFAULT_WINDOW_SIZE = "1540x900"
-SIDEBAR_WIDTH = 220
 RIGHT_PANEL_WIDTH = 360
 TREE_ROW_HEIGHT = 26
 
@@ -121,9 +119,6 @@ class OperationsPanel(ttk.Frame):
         self.exclude_suspicious_var = tk.BooleanVar(value=False)
         self.search_var = tk.StringVar(value="")
 
-        self.status_var = tk.StringVar(value="Pronto.")
-        self.header_subtitle_var = tk.StringVar(value="Carregando jobs disponíveis...")
-
         self.jobs_count_var = tk.StringVar(value="0")
         self.roll_name_var = tk.StringVar(value="Nenhum rolo ativo")
         self.roll_machine_var = tk.StringVar(value="-")
@@ -146,7 +141,6 @@ class OperationsPanel(ttk.Frame):
         self.review_combo: ttk.Combobox
 
         self._configure_styles()
-        self._configure_root()
         self._build_ui()
         self.refresh_all()
 
@@ -158,94 +152,21 @@ class OperationsPanel(ttk.Frame):
             pass
 
         style.configure("Treeview", rowheight=TREE_ROW_HEIGHT)
-        style.configure("Sidebar.TFrame", padding=0)
-        style.configure("SidebarTitle.TLabel", font=("Segoe UI", 14, "bold"))
-        style.configure("PageTitle.TLabel", font=("Segoe UI", 16, "bold"))
-        style.configure("PageSub.TLabel", font=("Segoe UI", 10))
         style.configure("Section.TLabelframe.Label", font=("Segoe UI", 10, "bold"))
         style.configure("MetricLabel.TLabel", font=("Segoe UI", 9))
         style.configure("MetricValue.TLabel", font=("Segoe UI", 11, "bold"))
 
-    def _configure_root(self) -> None:
-        if isinstance(self.master, tk.Tk):
-            self.master.title("Nexor - Operação")
-            self.master.geometry(DEFAULT_WINDOW_SIZE)
-            self.master.minsize(1320, 760)
-            self.master.columnconfigure(0, weight=1)
-            self.master.rowconfigure(0, weight=1)
-
     def _build_ui(self) -> None:
         self.grid(row=0, column=0, sticky="nsew")
-        self.columnconfigure(1, weight=1)
-        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(1, weight=1)
 
-        self._build_sidebar()
-        self._build_main_shell()
+        self._build_filters()
+        self._build_content()
 
-    def _build_sidebar(self) -> None:
-        sidebar = ttk.Frame(self, style="Sidebar.TFrame", padding=(12, 12, 10, 12))
-        sidebar.grid(row=0, column=0, sticky="nsw")
-        sidebar.configure(width=SIDEBAR_WIDTH)
-        sidebar.grid_propagate(False)
-
-        ttk.Label(sidebar, text="Nexor", style="SidebarTitle.TLabel").pack(anchor="w", pady=(0, 4))
-        ttk.Label(sidebar, text="Operação local-first").pack(anchor="w", pady=(0, 16))
-
-        nav = ttk.LabelFrame(sidebar, text="Navegação", style="Section.TLabelframe", padding=8)
-        nav.pack(fill="x", pady=(0, 12))
-
-        self._nav_button(nav, "Home", enabled=False)
-        self._nav_button(nav, "Operação", enabled=True)
-        self._nav_button(nav, "Rolos", enabled=False)
-        self._nav_button(nav, "Planejamento", enabled=False)
-        self._nav_button(nav, "Estoque", enabled=False)
-        self._nav_button(nav, "Cadastros", enabled=False)
-        self._nav_button(nav, "Configurações", enabled=False)
-
-        info = ttk.LabelFrame(sidebar, text="Atalhos", style="Section.TLabelframe", padding=8)
-        info.pack(fill="x", pady=(0, 12))
-        ttk.Button(info, text="Atualizar painel", command=self.refresh_all).pack(fill="x", pady=2)
-        ttk.Button(info, text="Novo rolo", command=self.create_roll).pack(fill="x", pady=2)
-
-        state = ttk.LabelFrame(sidebar, text="Estado", style="Section.TLabelframe", padding=8)
-        state.pack(fill="both", expand=True)
-        ttk.Label(state, textvariable=self.status_var, wraplength=180, justify="left").pack(anchor="w")
-
-    def _nav_button(self, master: tk.Misc, text: str, enabled: bool) -> None:
-        state = "normal" if enabled else "disabled"
-        ttk.Button(master, text=text, state=state).pack(fill="x", pady=2)
-
-    def _build_main_shell(self) -> None:
-        shell = ttk.Frame(self, padding=(0, 0, 0, 0))
-        shell.grid(row=0, column=1, sticky="nsew")
-        shell.columnconfigure(0, weight=1)
-        shell.rowconfigure(2, weight=1)
-        shell.rowconfigure(3, weight=0)
-
-        self._build_topbar(shell)
-        self._build_filters(shell)
-        self._build_content(shell)
-        self._build_footer(shell)
-
-    def _build_topbar(self, master: tk.Misc) -> None:
-        topbar = ttk.Frame(master, padding=(12, 12, 12, 8))
-        topbar.grid(row=0, column=0, sticky="ew")
-        topbar.columnconfigure(0, weight=1)
-
-        text_box = ttk.Frame(topbar)
-        text_box.grid(row=0, column=0, sticky="w")
-
-        ttk.Label(text_box, text="Operação", style="PageTitle.TLabel").pack(anchor="w")
-        ttk.Label(text_box, textvariable=self.header_subtitle_var, style="PageSub.TLabel").pack(anchor="w", pady=(2, 0))
-
-        actions = ttk.Frame(topbar)
-        actions.grid(row=0, column=1, sticky="e")
-        ttk.Button(actions, text="Atualizar", command=self.refresh_all).pack(side="right")
-        ttk.Button(actions, text="Limpar filtros", command=self.clear_filters).pack(side="right", padx=(0, 8))
-
-    def _build_filters(self, master: tk.Misc) -> None:
-        bar = ttk.LabelFrame(master, text="Filtros", style="Section.TLabelframe", padding=10)
-        bar.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 8))
+    def _build_filters(self) -> None:
+        bar = ttk.LabelFrame(self, text="Filtros", style="Section.TLabelframe", padding=10)
+        bar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         for col in range(9):
             bar.columnconfigure(col, weight=1 if col in {1, 3, 5, 7} else 0)
 
@@ -272,11 +193,13 @@ class OperationsPanel(ttk.Frame):
 
         actions = ttk.Frame(bar)
         actions.grid(row=1, column=0, columnspan=9, sticky="e", pady=(10, 0))
-        ttk.Button(actions, text="Aplicar filtros", command=self.refresh_jobs).pack(side="right")
+        ttk.Button(actions, text="Limpar filtros", command=self.clear_filters).pack(side="right")
+        ttk.Button(actions, text="Atualizar", command=self.refresh_all).pack(side="right", padx=(0, 8))
+        ttk.Button(actions, text="Aplicar filtros", command=self.refresh_jobs).pack(side="right", padx=(0, 8))
 
-    def _build_content(self, master: tk.Misc) -> None:
-        content = ttk.Frame(master)
-        content.grid(row=2, column=0, sticky="nsew", padx=12, pady=(0, 8))
+    def _build_content(self) -> None:
+        content = ttk.Frame(self)
+        content.grid(row=1, column=0, sticky="nsew")
         content.columnconfigure(0, weight=1)
         content.columnconfigure(1, weight=0)
         content.rowconfigure(0, weight=1)
@@ -399,13 +322,6 @@ class OperationsPanel(ttk.Frame):
             row=1, column=1, sticky="ew", padx=(8, 0), pady=(8, 0)
         )
 
-    def _build_footer(self, master: tk.Misc) -> None:
-        footer = ttk.Frame(master, padding=(12, 0, 12, 10))
-        footer.grid(row=3, column=0, sticky="ew")
-        footer.columnconfigure(0, weight=1)
-        ttk.Separator(footer, orient="horizontal").grid(row=0, column=0, sticky="ew", pady=(0, 6))
-        ttk.Label(footer, textvariable=self.status_var).grid(row=1, column=0, sticky="w")
-
     def _meta_row(self, master: tk.Misc, row: int, label: str, var: tk.StringVar) -> None:
         ttk.Label(master, text=f"{label}:").grid(row=row, column=0, sticky="nw", padx=(0, 8), pady=2)
         ttk.Label(master, textvariable=var, wraplength=250, justify="left").grid(row=row, column=1, sticky="ew", pady=2)
@@ -456,14 +372,9 @@ class OperationsPanel(ttk.Frame):
         self.refresh_jobs()
 
     def refresh_all(self) -> None:
-        self._set_status("Atualizando painel...")
-        try:
-            self._load_filter_values()
-            self.refresh_jobs()
-            self.refresh_active_roll_summary()
-            self._set_status("Painel atualizado.")
-        except Exception as exc:
-            self._handle_error("Falha ao atualizar o painel.", exc)
+        self._load_filter_values()
+        self.refresh_jobs()
+        self.refresh_active_roll_summary()
 
     def _load_filter_values(self) -> None:
         values = self.service.get_filter_values()
@@ -495,10 +406,7 @@ class OperationsPanel(ttk.Frame):
         jobs = self.service.list_available_jobs(filters)
         jobs = self._apply_text_search(jobs, self.search_var.get())
         self._populate_jobs_tree(jobs)
-
         self.jobs_count_var.set(str(len(jobs)))
-        self.header_subtitle_var.set(f"{len(jobs)} job(s) disponível(is) para montagem")
-        self._set_status(f"Jobs carregados: {len(jobs)}")
 
     def refresh_active_roll_summary(self) -> None:
         open_rolls = self.service.list_open_rolls()
@@ -507,7 +415,6 @@ class OperationsPanel(ttk.Frame):
             self.active_roll_id = None
             self.current_summary = None
             self._clear_roll_panel()
-            self._set_status("Nenhum rolo aberto.")
             return
 
         available_ids = {r.roll_id for r in open_rolls}
@@ -524,21 +431,16 @@ class OperationsPanel(ttk.Frame):
         if not dialog.result:
             return
 
-        try:
-            summary = self.service.create_roll(
-                machine=str(dialog.result["machine"]),
-                fabric=dialog.result["fabric"],
-                note=dialog.result["note"],
-                roll_name=dialog.result["roll_name"],
-            )
-        except Exception as exc:
-            self._handle_error("Falha ao criar rolo.", exc)
-            return
+        summary = self.service.create_roll(
+            machine=str(dialog.result["machine"]),
+            fabric=dialog.result["fabric"],
+            note=dialog.result["note"],
+            roll_name=dialog.result["roll_name"],
+        )
 
         self.active_roll_id = summary.roll_id
         self.current_summary = summary
         self._apply_summary(summary)
-        self._set_status(f"Rolo criado: {summary.roll_name}")
 
     def add_selected_job_to_active_roll(self) -> None:
         if self.active_roll_id is None:
@@ -550,22 +452,15 @@ class OperationsPanel(ttk.Frame):
             messagebox.showwarning("Operação", "Selecione um job para adicionar.", parent=self)
             return
 
-        try:
-            summary = self.service.add_job_to_roll(roll_id=self.active_roll_id, job_row_id=job_row_id)
-        except Exception as exc:
-            self._handle_error("Falha ao adicionar job ao rolo.", exc)
-            return
-
+        summary = self.service.add_job_to_roll(roll_id=self.active_roll_id, job_row_id=job_row_id)
         self.current_summary = summary
         self._apply_summary(summary)
         self.refresh_jobs()
-        self._set_status(f"Job {job_row_id} adicionado ao rolo {summary.roll_name}.")
 
         if summary.pending_review_count > 0:
             messagebox.showwarning(
                 "Atenção",
-                "O rolo ativo contém jobs com PENDING_REVIEW.\n\n"
-                "No MVP eles continuam permitidos, mas devem ficar visíveis.",
+                "O rolo ativo contém jobs com PENDING_REVIEW.\n\nNo MVP eles continuam permitidos, mas devem ficar visíveis.",
                 parent=self,
             )
 
@@ -587,16 +482,10 @@ class OperationsPanel(ttk.Frame):
         if not confirm:
             return
 
-        try:
-            summary = self.service.remove_job_from_roll(roll_id=self.active_roll_id, job_row_id=job_row_id)
-        except Exception as exc:
-            self._handle_error("Falha ao remover item do rolo.", exc)
-            return
-
+        summary = self.service.remove_job_from_roll(roll_id=self.active_roll_id, job_row_id=job_row_id)
         self.current_summary = summary
         self._apply_summary(summary)
         self.refresh_jobs()
-        self._set_status(f"Item {job_row_id} removido do rolo {summary.roll_name}.")
 
     def close_active_roll(self) -> None:
         if self.current_summary is None or self.active_roll_id is None:
@@ -617,17 +506,14 @@ class OperationsPanel(ttk.Frame):
         self.current_summary = closed_summary
 
         if dialog.export_result is not None:
-            result = dialog.export_result
-            result_dialog = RollExportResultDialog(self.winfo_toplevel(), result=result)
+            result_dialog = RollExportResultDialog(self.winfo_toplevel(), result=dialog.export_result)
             self.wait_window(result_dialog)
-            self._set_status(f"Rolo fechado e exportado: {closed_summary.roll_name}")
         else:
             messagebox.showinfo(
                 "Fechamento concluído",
                 f"Rolo fechado com sucesso:\n{closed_summary.roll_name}",
                 parent=self,
             )
-            self._set_status(f"Rolo fechado: {closed_summary.roll_name}")
 
         self.refresh_jobs()
         self.refresh_active_roll_summary()
@@ -641,16 +527,9 @@ class OperationsPanel(ttk.Frame):
         if not directory:
             return
 
-        try:
-            result = self.service.export_roll(roll_id=self.active_roll_id, output_dir=Path(directory))
-        except Exception as exc:
-            self._handle_error("Falha ao exportar rolo.", exc)
-            return
-
+        result = self.service.export_roll(roll_id=self.active_roll_id, output_dir=Path(directory))
         result_dialog = RollExportResultDialog(self.winfo_toplevel(), result=result)
         self.wait_window(result_dialog)
-
-        self._set_status(f"Rolo exportado: {result['roll_name']}")
         self.refresh_active_roll_summary()
 
     def show_roll_detail_dialog(self) -> None:
@@ -778,13 +657,6 @@ class OperationsPanel(ttk.Frame):
             return int(values[0])
         except (TypeError, ValueError):
             return None
-
-    def _set_status(self, text: str) -> None:
-        self.status_var.set(text)
-
-    def _handle_error(self, message: str, exc: Exception) -> None:
-        self._set_status(f"Erro: {exc}")
-        messagebox.showerror("Nexor", f"{message}\n\nMotivo: {exc}", parent=self)
 
     @staticmethod
     def _clear_tree(tree: ttk.Treeview) -> None:

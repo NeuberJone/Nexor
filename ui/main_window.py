@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import ttk
 
 from application.operations_panel_service import OperationsPanelService
+from ui.home_panel import HomePanel
 from ui.operations_panel import OperationsPanel
 from ui.rolls_panel import RollsPanel
 
@@ -34,8 +35,8 @@ class MainWindow(ttk.Frame):
         self.current_page_key: str | None = None
         self.pages: dict[str, ttk.Frame] = {}
 
-        self.page_title_var = tk.StringVar(value="Operação")
-        self.page_subtitle_var = tk.StringVar(value="Montagem operacional de rolos.")
+        self.page_title_var = tk.StringVar(value="Home")
+        self.page_subtitle_var = tk.StringVar(value="Visão geral do estado operacional.")
         self.status_var = tk.StringVar(value="Pronto.")
 
         self.nav_buttons: dict[str, ttk.Button] = {}
@@ -43,7 +44,7 @@ class MainWindow(ttk.Frame):
         self._configure_styles()
         self._configure_root()
         self._build_ui()
-        self.show_page("operations")
+        self.show_page("home")
 
     def _configure_styles(self) -> None:
         style = ttk.Style()
@@ -91,6 +92,14 @@ class MainWindow(ttk.Frame):
         nav = ttk.LabelFrame(sidebar, text="Navegação", padding=8)
         nav.pack(fill="x", pady=(0, 12))
 
+        self.nav_buttons["home"] = ttk.Button(
+            nav,
+            text="Home",
+            style="Nav.TButton",
+            command=lambda: self.show_page("home"),
+        )
+        self.nav_buttons["home"].pack(fill="x", pady=2)
+
         self.nav_buttons["operations"] = ttk.Button(
             nav,
             text="Operação",
@@ -107,7 +116,6 @@ class MainWindow(ttk.Frame):
         )
         self.nav_buttons["rolls"].pack(fill="x", pady=2)
 
-        # Espaços reservados para expansão futura, mas sem fingir que já existem
         ttk.Button(nav, text="Planejamento", state="disabled", style="Nav.TButton").pack(fill="x", pady=2)
         ttk.Button(nav, text="Estoque", state="disabled", style="Nav.TButton").pack(fill="x", pady=2)
         ttk.Button(nav, text="Cadastros", state="disabled", style="Nav.TButton").pack(fill="x", pady=2)
@@ -116,6 +124,7 @@ class MainWindow(ttk.Frame):
         quick = ttk.LabelFrame(sidebar, text="Ações rápidas", padding=8)
         quick.pack(fill="x", pady=(0, 12))
 
+        ttk.Button(quick, text="Ir para Home", command=lambda: self.show_page("home")).pack(fill="x", pady=2)
         ttk.Button(quick, text="Ir para Operação", command=lambda: self.show_page("operations")).pack(fill="x", pady=2)
         ttk.Button(quick, text="Ir para Rolos", command=lambda: self.show_page("rolls")).pack(fill="x", pady=2)
         ttk.Button(quick, text="Atualizar página", command=self.refresh_current_page).pack(fill="x", pady=2)
@@ -149,7 +158,6 @@ class MainWindow(ttk.Frame):
 
         actions = ttk.Frame(topbar)
         actions.grid(row=0, column=1, sticky="e")
-
         ttk.Button(actions, text="Atualizar página", command=self.refresh_current_page).pack(side="right")
 
     def _build_content_area(self, master: tk.Misc) -> None:
@@ -167,13 +175,13 @@ class MainWindow(ttk.Frame):
         ttk.Label(footer, textvariable=self.status_var).grid(row=1, column=0, sticky="w")
 
     def _create_page(self, key: str) -> ttk.Frame:
+        if key == "home":
+            return HomePanel(self.content, service=self.service, on_navigate=self.show_page)
         if key == "operations":
-            page = OperationsPanel(self.content, service=self.service)
-        elif key == "rolls":
-            page = RollsPanel(self.content, service=self.service)
-        else:
-            raise ValueError(f"Página desconhecida: {key}")
-        return page
+            return OperationsPanel(self.content, service=self.service)
+        if key == "rolls":
+            return RollsPanel(self.content, service=self.service)
+        raise ValueError(f"Página desconhecida: {key}")
 
     def show_page(self, key: str) -> None:
         if key not in self.pages:
@@ -202,13 +210,18 @@ class MainWindow(ttk.Frame):
         if callable(refresh_method):
             refresh_method()
 
-        if self.current_page_key == "operations":
+        if self.current_page_key == "home":
+            self.status_var.set("Página atual: Home")
+        elif self.current_page_key == "operations":
             self.status_var.set("Página atual: Operação")
         elif self.current_page_key == "rolls":
             self.status_var.set("Página atual: Rolos")
 
     def _apply_page_metadata(self, key: str) -> None:
-        if key == "operations":
+        if key == "home":
+            self.page_title_var.set("Home")
+            self.page_subtitle_var.set("Visão geral do estado operacional.")
+        elif key == "operations":
             self.page_title_var.set("Operação")
             self.page_subtitle_var.set("Montagem operacional de rolos.")
         elif key == "rolls":

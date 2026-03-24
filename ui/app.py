@@ -11,7 +11,7 @@ from tkinter import messagebox
 # quanto por:
 #   python ui/app.py
 #
-# O ideal depois é manter somente execução por pacote.
+# Depois, o ideal é manter só execução por pacote.
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -52,8 +52,9 @@ class NexorApp:
         self.root.bind("<Control-r>", self._refresh_current_page)
         self.root.bind("<Control-R>", self._refresh_current_page)
 
-        self.root.bind("<Control-1>", lambda event: self._show_page("operations"))
-        self.root.bind("<Control-2>", lambda event: self._show_page("rolls"))
+        self.root.bind("<Control-1>", lambda event: self._show_page("home"))
+        self.root.bind("<Control-2>", lambda event: self._show_page("operations"))
+        self.root.bind("<Control-3>", lambda event: self._show_page("rolls"))
 
     def _refresh_current_page(self, event: tk.Event | None = None) -> None:
         if self.main_window is not None:

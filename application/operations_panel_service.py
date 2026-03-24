@@ -20,6 +20,14 @@ class AvailableJobsFilters:
 
 
 @dataclass(slots=True)
+class RollListFilters:
+    status: str | None = None
+    machine: str | None = None
+    search: str | None = None
+    limit: int | None = None
+
+
+@dataclass(slots=True)
 class AvailableJobRow:
     row_id: int
     job_id: str
@@ -94,15 +102,6 @@ class RollSummaryDTO:
 
 
 class OperationsPanelService:
-    """
-    Thin application-service layer for the local Operations Panel.
-
-    Goals:
-    - keep UI code free from repository/export details
-    - reuse the validated operational core
-    - centralize screen-facing orchestration in one place
-    """
-
     def __init__(self, repository: ProductionRepository | None = None) -> None:
         self.repository = repository or ProductionRepository()
 
@@ -121,12 +120,45 @@ class OperationsPanelService:
         )
         return [self._map_available_job(job) for job in jobs]
 
-    def list_open_rolls(self) -> list[OpenRollRow]:
+    def list_rolls(
+        self,
+        filters: RollListFilters | None = None,
+    ) -> list[OpenRollRow]:
+        filters = filters or RollListFilters()
+
         rows: list[OpenRollRow] = []
-        for roll in self.repository.list_rolls(status=ROLL_OPEN):
+        rolls = self.repository.list_rolls(status=_norm(filters.status))
+
+        for roll in rolls:
             summary = self.repository.get_roll_summary(int(roll.id))
-            rows.append(self._map_open_roll(summary))
+            row = self._map_open_roll(summary)
+
+            if filters.machine and row.machine.strip().upper() != filters.machine.strip().upper():
+                continue
+
+            if filters.search:
+                haystack = " ".join(
+                    [
+                        str(row.roll_id),
+                        str(row.roll_name or ""),
+                        str(row.machine or ""),
+                        str(row.fabric or ""),
+                        str(row.status or ""),
+                        str(row.note or ""),
+                    ]
+                ).lower()
+                if filters.search.strip().lower() not in haystack:
+                    continue
+
+            rows.append(row)
+
+            if filters.limit is not None and len(rows) >= filters.limit:
+                break
+
         return rows
+
+    def list_open_rolls(self) -> list[OpenRollRow]:
+        return self.list_rolls(RollListFilters(status=ROLL_OPEN))
 
     def create_roll(
         self,
@@ -186,6 +218,17 @@ class OperationsPanelService:
             "machines": machines,
             "fabrics": fabrics,
             "review_statuses": review_statuses,
+        }
+
+    def get_roll_filter_values(self) -> dict[str, list[str]]:
+        rows = self.list_rolls(RollListFilters(limit=None))
+
+        statuses = sorted({row.status for row in rows if row.status})
+        machines = sorted({row.machine for row in rows if row.machine})
+
+        return {
+            "statuses": statuses,
+            "machines": machines,
         }
 
     def _map_available_job(self, job: Any) -> AvailableJobRow:

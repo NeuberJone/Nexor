@@ -14,30 +14,30 @@ from application.operations_panel_service import (
 from ui.roll_export_result_dialog import RollExportResultDialog
 
 
-DEFAULT_WINDOW_SIZE = "1480x880"
 TREE_ROW_HEIGHT = 26
 
 
 class RollsPanel(ttk.Frame):
     """
-    Painel de consulta de rolos.
+    Painel de consulta de rolos em modo content-only.
 
-    Objetivo:
-    - listar rolos
-    - filtrar por status/máquina/busca
-    - inspecionar detalhes
-    - exportar novamente quando aplicável
+    O shell (sidebar, topbar, footer e ações rápidas globais)
+    pertence ao MainWindow.
+
+    Esta página mostra apenas:
+    - filtros
+    - lista de rolos
+    - detalhes do rolo selecionado
     """
 
     def __init__(self, master: tk.Misc, service: OperationsPanelService | None = None) -> None:
-        super().__init__(master, padding=10)
+        super().__init__(master)
         self.master = master
         self.service = service or OperationsPanelService()
 
         self.status_var = tk.StringVar(value="ALL")
         self.machine_var = tk.StringVar(value="ALL")
         self.search_var = tk.StringVar(value="")
-        self.status_line_var = tk.StringVar(value="Pronto.")
         self.rolls_count_var = tk.StringVar(value="0")
         self.detail_title_var = tk.StringVar(value="Nenhum rolo selecionado")
         self.detail_status_var = tk.StringVar(value="-")
@@ -61,7 +61,6 @@ class RollsPanel(ttk.Frame):
         self.machine_combo: ttk.Combobox
 
         self._configure_styles()
-        self._configure_root()
         self._build_ui()
         self.refresh_all()
 
@@ -74,56 +73,21 @@ class RollsPanel(ttk.Frame):
 
         style.configure("Treeview", rowheight=TREE_ROW_HEIGHT)
         style.configure("Section.TLabelframe.Label", font=("Segoe UI", 10, "bold"))
-        style.configure("Headline.TLabel", font=("Segoe UI", 12, "bold"))
         style.configure("MetricValue.TLabel", font=("Segoe UI", 11, "bold"))
-
-    def _configure_root(self) -> None:
-        if isinstance(self.master, tk.Tk):
-            self.master.title("Nexor - Rolos")
-            self.master.geometry(DEFAULT_WINDOW_SIZE)
-            self.master.minsize(1280, 760)
-            self.master.columnconfigure(0, weight=1)
-            self.master.rowconfigure(0, weight=1)
 
     def _build_ui(self) -> None:
         self.grid(row=0, column=0, sticky="nsew")
         self.columnconfigure(0, weight=3)
         self.columnconfigure(1, weight=2)
         self.rowconfigure(1, weight=1)
-        self.rowconfigure(2, weight=0)
 
-        self._build_header()
+        self._build_filters()
         self._build_left_panel()
         self._build_right_panel()
-        self._build_status_bar()
 
-    def _build_header(self) -> None:
-        header = ttk.Frame(self, padding=(0, 0, 0, 10))
-        header.grid(row=0, column=0, columnspan=2, sticky="ew")
-        header.columnconfigure(0, weight=1)
-
-        title_box = ttk.Frame(header)
-        title_box.grid(row=0, column=0, sticky="w")
-
-        ttk.Label(title_box, text="Rolos", style="Headline.TLabel").grid(row=0, column=0, sticky="w")
-        ttk.Label(
-            title_box,
-            text="Consulta operacional de rolos e inspeção de detalhes.",
-        ).grid(row=1, column=0, sticky="w", pady=(2, 0))
-
-        actions = ttk.Frame(header)
-        actions.grid(row=0, column=1, sticky="e")
-        ttk.Button(actions, text="Atualizar", command=self.refresh_all).pack(side="right")
-        ttk.Button(actions, text="Limpar filtros", command=self.clear_filters).pack(side="right", padx=(0, 8))
-
-    def _build_left_panel(self) -> None:
-        panel = ttk.LabelFrame(self, text="Lista de rolos", style="Section.TLabelframe")
-        panel.grid(row=1, column=0, sticky="nsew", padx=(0, 8))
-        panel.columnconfigure(0, weight=1)
-        panel.rowconfigure(2, weight=1)
-
-        filters = ttk.Frame(panel, padding=8)
-        filters.grid(row=0, column=0, sticky="ew")
+    def _build_filters(self) -> None:
+        filters = ttk.LabelFrame(self, text="Filtros", style="Section.TLabelframe", padding=10)
+        filters.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
         for col in range(6):
             filters.columnconfigure(col, weight=1 if col in {1, 3, 5} else 0)
 
@@ -138,14 +102,25 @@ class RollsPanel(ttk.Frame):
         ttk.Label(filters, text="Busca").grid(row=0, column=4, sticky="w", padx=(0, 6))
         ttk.Entry(filters, textvariable=self.search_var).grid(row=0, column=5, sticky="ew")
 
-        actions = ttk.Frame(panel, padding=(8, 0, 8, 8))
-        actions.grid(row=1, column=0, sticky="ew")
+        actions = ttk.Frame(filters)
+        actions.grid(row=1, column=0, columnspan=6, sticky="e", pady=(10, 0))
+        ttk.Button(actions, text="Limpar filtros", command=self.clear_filters).pack(side="right")
+        ttk.Button(actions, text="Atualizar", command=self.refresh_all).pack(side="right", padx=(0, 8))
+        ttk.Button(actions, text="Aplicar filtros", command=self.refresh_rolls).pack(side="right", padx=(0, 8))
+
+    def _build_left_panel(self) -> None:
+        panel = ttk.LabelFrame(self, text="Lista de rolos", style="Section.TLabelframe")
+        panel.grid(row=1, column=0, sticky="nsew", padx=(0, 8))
+        panel.columnconfigure(0, weight=1)
+        panel.rowconfigure(1, weight=1)
+
+        actions = ttk.Frame(panel, padding=(8, 8, 8, 8))
+        actions.grid(row=0, column=0, sticky="ew")
         ttk.Label(actions, text="Total visível:").pack(side="left")
         ttk.Label(actions, textvariable=self.rolls_count_var, style="MetricValue.TLabel").pack(side="left", padx=(6, 0))
-        ttk.Button(actions, text="Aplicar filtros", command=self.refresh_rolls).pack(side="right")
 
         tree_wrap = ttk.Frame(panel, padding=(8, 0, 8, 8))
-        tree_wrap.grid(row=2, column=0, sticky="nsew")
+        tree_wrap.grid(row=1, column=0, sticky="nsew")
         tree_wrap.columnconfigure(0, weight=1)
         tree_wrap.rowconfigure(0, weight=1)
 
@@ -234,13 +209,6 @@ class RollsPanel(ttk.Frame):
             row=0, column=1, sticky="ew", padx=(8, 0)
         )
 
-    def _build_status_bar(self) -> None:
-        status = ttk.Frame(self, padding=(0, 8, 0, 0))
-        status.grid(row=2, column=0, columnspan=2, sticky="ew")
-        status.columnconfigure(0, weight=1)
-        ttk.Separator(status, orient="horizontal").grid(row=0, column=0, sticky="ew", pady=(0, 6))
-        ttk.Label(status, textvariable=self.status_line_var).grid(row=1, column=0, sticky="w")
-
     def _meta_row(self, master: tk.Misc, row: int, label: str, variable: tk.StringVar) -> None:
         ttk.Label(master, text=f"{label}:").grid(row=row, column=0, sticky="nw", padx=(0, 8), pady=2)
         ttk.Label(master, textvariable=variable, wraplength=320, justify="left").grid(
@@ -288,13 +256,8 @@ class RollsPanel(ttk.Frame):
         self.refresh_rolls()
 
     def refresh_all(self) -> None:
-        self._set_status("Atualizando rolos...")
-        try:
-            self._load_filter_values()
-            self.refresh_rolls()
-            self._set_status("Painel de rolos atualizado.")
-        except Exception as exc:
-            self._handle_error("Falha ao atualizar painel de rolos.", exc)
+        self._load_filter_values()
+        self.refresh_rolls()
 
     def _load_filter_values(self) -> None:
         values = self.service.get_roll_filter_values()
@@ -321,7 +284,6 @@ class RollsPanel(ttk.Frame):
         rows = self.service.list_rolls(filters)
         self._populate_rolls_tree(rows)
         self.rolls_count_var.set(str(len(rows)))
-        self._set_status(f"Rolos carregados: {len(rows)}")
 
         if not rows:
             self.current_summary = None
@@ -339,15 +301,9 @@ class RollsPanel(ttk.Frame):
         if roll_id is None:
             return
 
-        try:
-            summary = self.service.get_roll_summary(roll_id)
-        except Exception as exc:
-            self._handle_error("Falha ao carregar detalhes do rolo.", exc)
-            return
-
+        summary = self.service.get_roll_summary(roll_id)
         self.current_summary = summary
         self._apply_summary(summary)
-        self._set_status(f"Detalhes carregados: {summary.roll_name}")
 
     def export_selected_roll(self) -> None:
         if self.current_summary is None:
@@ -358,18 +314,13 @@ class RollsPanel(ttk.Frame):
         if not directory:
             return
 
-        try:
-            result = self.service.export_roll(
-                roll_id=self.current_summary.roll_id,
-                output_dir=Path(directory),
-            )
-        except Exception as exc:
-            self._handle_error("Falha ao exportar o rolo.", exc)
-            return
+        result = self.service.export_roll(
+            roll_id=self.current_summary.roll_id,
+            output_dir=Path(directory),
+        )
 
         dialog = RollExportResultDialog(self.winfo_toplevel(), result=result)
         self.wait_window(dialog)
-        self._set_status(f"Rolo exportado: {result['roll_name']}")
 
     def show_detail_dialog(self) -> None:
         if self.current_summary is None:
@@ -472,13 +423,6 @@ class RollsPanel(ttk.Frame):
             return int(values[0])
         except (TypeError, ValueError):
             return None
-
-    def _set_status(self, text: str) -> None:
-        self.status_line_var.set(text)
-
-    def _handle_error(self, message: str, exc: Exception) -> None:
-        self._set_status(f"Erro: {exc}")
-        messagebox.showerror("Nexor", f"{message}\n\nMotivo: {exc}", parent=self)
 
     @staticmethod
     def _clear_tree(tree: ttk.Treeview) -> None:

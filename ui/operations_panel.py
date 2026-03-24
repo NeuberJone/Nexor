@@ -16,7 +16,7 @@ from ui.roll_closure_dialog import RollClosureDialog
 from ui.roll_export_result_dialog import RollExportResultDialog
 
 
-RIGHT_PANEL_WIDTH = 360
+SUMMARY_PANEL_WIDTH = 300
 TREE_ROW_HEIGHT = 26
 
 
@@ -120,10 +120,12 @@ class OperationsPanel(ttk.Frame):
         self.search_var = tk.StringVar(value="")
 
         self.jobs_count_var = tk.StringVar(value="0")
-        self.roll_name_var = tk.StringVar(value="Nenhum rolo ativo")
+        self.roll_title_var = tk.StringVar(value="Nenhum rolo ativo")
         self.roll_machine_var = tk.StringVar(value="-")
         self.roll_fabric_var = tk.StringVar(value="-")
         self.roll_status_var = tk.StringVar(value="-")
+        self.roll_note_var = tk.StringVar(value="-")
+
         self.roll_jobs_var = tk.StringVar(value="0")
         self.roll_planned_var = tk.StringVar(value="0.00 m")
         self.roll_effective_var = tk.StringVar(value="0.00 m")
@@ -132,7 +134,6 @@ class OperationsPanel(ttk.Frame):
         self.roll_pending_var = tk.StringVar(value="0")
         self.roll_ok_var = tk.StringVar(value="0")
         self.roll_suspicious_var = tk.StringVar(value="0")
-        self.roll_note_var = tk.StringVar(value="-")
 
         self.jobs_tree: ttk.Treeview
         self.roll_items_tree: ttk.Treeview
@@ -155,6 +156,7 @@ class OperationsPanel(ttk.Frame):
         style.configure("Section.TLabelframe.Label", font=("Segoe UI", 10, "bold"))
         style.configure("MetricLabel.TLabel", font=("Segoe UI", 9))
         style.configure("MetricValue.TLabel", font=("Segoe UI", 11, "bold"))
+        style.configure("RollTitle.TLabel", font=("Segoe UI", 12, "bold"))
 
     def _build_ui(self) -> None:
         self.grid(row=0, column=0, sticky="nsew")
@@ -162,7 +164,7 @@ class OperationsPanel(ttk.Frame):
         self.rowconfigure(1, weight=1)
 
         self._build_filters()
-        self._build_content()
+        self._build_body()
 
     def _build_filters(self) -> None:
         bar = ttk.LabelFrame(self, text="Filtros", style="Section.TLabelframe", padding=10)
@@ -197,19 +199,21 @@ class OperationsPanel(ttk.Frame):
         ttk.Button(actions, text="Atualizar", command=self.refresh_all).pack(side="right", padx=(0, 8))
         ttk.Button(actions, text="Aplicar filtros", command=self.refresh_jobs).pack(side="right", padx=(0, 8))
 
-    def _build_content(self) -> None:
-        content = ttk.Frame(self)
-        content.grid(row=1, column=0, sticky="nsew")
-        content.columnconfigure(0, weight=1)
-        content.columnconfigure(1, weight=0)
-        content.rowconfigure(0, weight=1)
+    def _build_body(self) -> None:
+        body = ttk.Frame(self)
+        body.grid(row=1, column=0, sticky="nsew")
+        body.columnconfigure(0, weight=1)
+        body.columnconfigure(1, weight=0)
+        body.rowconfigure(0, weight=3)
+        body.rowconfigure(1, weight=2)
 
-        self._build_jobs_area(content)
-        self._build_roll_panel(content)
+        self._build_jobs_panel(body)
+        self._build_roll_panel(body)
+        self._build_summary_panel(body)
 
-    def _build_jobs_area(self, master: tk.Misc) -> None:
+    def _build_jobs_panel(self, master: tk.Misc) -> None:
         panel = ttk.LabelFrame(master, text="Jobs disponíveis", style="Section.TLabelframe", padding=8)
-        panel.grid(row=0, column=0, sticky="nsew", padx=(0, 10))
+        panel.grid(row=0, column=0, sticky="nsew", padx=(0, 10), pady=(0, 8))
         panel.columnconfigure(0, weight=1)
         panel.rowconfigure(1, weight=1)
 
@@ -247,69 +251,76 @@ class OperationsPanel(ttk.Frame):
 
     def _build_roll_panel(self, master: tk.Misc) -> None:
         panel = ttk.LabelFrame(master, text="Rolo em montagem", style="Section.TLabelframe", padding=8)
-        panel.grid(row=0, column=1, sticky="nsew")
-        panel.configure(width=RIGHT_PANEL_WIDTH)
-        panel.grid_propagate(False)
+        panel.grid(row=1, column=0, sticky="nsew", padx=(0, 10))
         panel.columnconfigure(0, weight=1)
         panel.rowconfigure(2, weight=1)
 
-        header = ttk.Frame(panel)
-        header.grid(row=0, column=0, sticky="ew")
-        header.columnconfigure(0, weight=1)
+        title_row = ttk.Frame(panel)
+        title_row.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        title_row.columnconfigure(0, weight=1)
 
-        ttk.Label(header, textvariable=self.roll_name_var, style="MetricValue.TLabel", wraplength=300).grid(
-            row=0, column=0, sticky="w"
-        )
-        btns = ttk.Frame(header)
-        btns.grid(row=0, column=1, sticky="e")
-        ttk.Button(btns, text="Novo rolo", command=self.create_roll).pack(side="left")
-        ttk.Button(btns, text="Fechar", command=self.close_active_roll).pack(side="left", padx=(6, 0))
+        ttk.Label(
+            title_row,
+            textvariable=self.roll_title_var,
+            style="RollTitle.TLabel",
+            wraplength=700,
+        ).grid(row=0, column=0, sticky="w")
+
+        buttons = ttk.Frame(title_row)
+        buttons.grid(row=0, column=1, sticky="e")
+        ttk.Button(buttons, text="Novo rolo", command=self.create_roll).pack(side="left")
+        ttk.Button(buttons, text="Fechar", command=self.close_active_roll).pack(side="left", padx=(8, 0))
 
         meta = ttk.Frame(panel)
-        meta.grid(row=1, column=0, sticky="ew", pady=(10, 8))
-        meta.columnconfigure(1, weight=1)
+        meta.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+        for col in range(4):
+            meta.columnconfigure(col, weight=1)
 
-        self._meta_row(meta, 0, "Máquina", self.roll_machine_var)
-        self._meta_row(meta, 1, "Tecido", self.roll_fabric_var)
-        self._meta_row(meta, 2, "Status", self.roll_status_var)
-        self._meta_row(meta, 3, "Observação", self.roll_note_var)
+        self._meta_cell(meta, 0, 0, "Máquina", self.roll_machine_var)
+        self._meta_cell(meta, 0, 1, "Tecido", self.roll_fabric_var)
+        self._meta_cell(meta, 0, 2, "Status", self.roll_status_var)
+        self._meta_cell(meta, 0, 3, "Observação", self.roll_note_var)
 
         items_box = ttk.LabelFrame(panel, text="Itens do rolo", style="Section.TLabelframe", padding=6)
-        items_box.grid(row=2, column=0, sticky="nsew", pady=(0, 8))
+        items_box.grid(row=2, column=0, sticky="nsew")
         items_box.columnconfigure(0, weight=1)
         items_box.rowconfigure(0, weight=1)
 
         self.roll_items_tree = ttk.Treeview(
             items_box,
-            columns=("row_id", "job_id", "fabric", "review", "consumed"),
+            columns=("row_id", "job_id", "machine", "fabric", "review", "document", "consumed"),
             show="headings",
             selectmode="browse",
-            height=12,
         )
         self.roll_items_tree.grid(row=0, column=0, sticky="nsew")
 
-        sb = ttk.Scrollbar(items_box, orient="vertical", command=self.roll_items_tree.yview)
-        sb.grid(row=0, column=1, sticky="ns")
-        self.roll_items_tree.configure(yscrollcommand=sb.set)
+        sb_y = ttk.Scrollbar(items_box, orient="vertical", command=self.roll_items_tree.yview)
+        sb_y.grid(row=0, column=1, sticky="ns")
+        sb_x = ttk.Scrollbar(items_box, orient="horizontal", command=self.roll_items_tree.xview)
+        sb_x.grid(row=1, column=0, sticky="ew")
+        self.roll_items_tree.configure(yscrollcommand=sb_y.set, xscrollcommand=sb_x.set)
 
         self._configure_roll_items_tree()
 
-        metrics = ttk.LabelFrame(panel, text="Resumo", style="Section.TLabelframe", padding=8)
-        metrics.grid(row=3, column=0, sticky="ew", pady=(0, 8))
-        metrics.columnconfigure(0, weight=1)
-        metrics.columnconfigure(1, weight=1)
+    def _build_summary_panel(self, master: tk.Misc) -> None:
+        panel = ttk.LabelFrame(master, text="Resumo", style="Section.TLabelframe", padding=8)
+        panel.grid(row=0, column=1, rowspan=2, sticky="nsew")
+        panel.configure(width=SUMMARY_PANEL_WIDTH)
+        panel.grid_propagate(False)
+        panel.columnconfigure(0, weight=1)
+        panel.columnconfigure(1, weight=1)
 
-        self._metric(metrics, 0, 0, "Jobs", self.roll_jobs_var)
-        self._metric(metrics, 0, 1, "Planejado", self.roll_planned_var)
-        self._metric(metrics, 1, 0, "Efetivo", self.roll_effective_var)
-        self._metric(metrics, 1, 1, "Gap", self.roll_gap_var)
-        self._metric(metrics, 2, 0, "Consumido", self.roll_consumed_var)
-        self._metric(metrics, 2, 1, "Pendentes", self.roll_pending_var)
-        self._metric(metrics, 3, 0, "Revisados OK", self.roll_ok_var)
-        self._metric(metrics, 3, 1, "Suspeitos", self.roll_suspicious_var)
+        self._metric(panel, 0, 0, "Jobs", self.roll_jobs_var)
+        self._metric(panel, 0, 1, "Planejado", self.roll_planned_var)
+        self._metric(panel, 1, 0, "Efetivo", self.roll_effective_var)
+        self._metric(panel, 1, 1, "Gap", self.roll_gap_var)
+        self._metric(panel, 2, 0, "Consumido", self.roll_consumed_var)
+        self._metric(panel, 2, 1, "Pendentes", self.roll_pending_var)
+        self._metric(panel, 3, 0, "Revisados OK", self.roll_ok_var)
+        self._metric(panel, 3, 1, "Suspeitos", self.roll_suspicious_var)
 
         actions = ttk.Frame(panel)
-        actions.grid(row=4, column=0, sticky="ew")
+        actions.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(12, 0))
         actions.columnconfigure(0, weight=1)
         actions.columnconfigure(1, weight=1)
 
@@ -322,13 +333,15 @@ class OperationsPanel(ttk.Frame):
             row=1, column=1, sticky="ew", padx=(8, 0), pady=(8, 0)
         )
 
-    def _meta_row(self, master: tk.Misc, row: int, label: str, var: tk.StringVar) -> None:
-        ttk.Label(master, text=f"{label}:").grid(row=row, column=0, sticky="nw", padx=(0, 8), pady=2)
-        ttk.Label(master, textvariable=var, wraplength=250, justify="left").grid(row=row, column=1, sticky="ew", pady=2)
+    def _meta_cell(self, master: tk.Misc, row: int, col: int, label: str, var: tk.StringVar) -> None:
+        box = ttk.Frame(master)
+        box.grid(row=row, column=col, sticky="ew", padx=4, pady=2)
+        ttk.Label(box, text=f"{label}:").pack(anchor="w")
+        ttk.Label(box, textvariable=var, wraplength=180, justify="left").pack(anchor="w")
 
     def _metric(self, master: tk.Misc, row: int, col: int, label: str, var: tk.StringVar) -> None:
         box = ttk.Frame(master)
-        box.grid(row=row, column=col, sticky="ew", padx=4, pady=4)
+        box.grid(row=row, column=col, sticky="ew", padx=4, pady=8)
         ttk.Label(box, text=label, style="MetricLabel.TLabel").pack(anchor="w")
         ttk.Label(box, textvariable=var, style="MetricValue.TLabel").pack(anchor="w")
 
@@ -353,14 +366,16 @@ class OperationsPanel(ttk.Frame):
     def _configure_roll_items_tree(self) -> None:
         spec = {
             "row_id": ("ID", 60),
-            "job_id": ("Job", 80),
+            "job_id": ("Job", 90),
+            "machine": ("Máquina", 80),
             "fabric": ("Tecido", 110),
-            "review": ("Review", 105),
-            "consumed": ("Cons. (m)", 85),
+            "review": ("Review", 110),
+            "document": ("Documento", 260),
+            "consumed": ("Cons. (m)", 90),
         }
         for col, (title, width) in spec.items():
             self.roll_items_tree.heading(col, text=title)
-            anchor = "w" if col in {"fabric", "review"} else "center"
+            anchor = "w" if col in {"fabric", "review", "document"} else "center"
             self.roll_items_tree.column(col, width=width, minwidth=width, anchor=anchor)
 
     def clear_filters(self) -> None:
@@ -557,7 +572,7 @@ class OperationsPanel(ttk.Frame):
         messagebox.showinfo("Detalhes do rolo", text, parent=self)
 
     def _apply_summary(self, summary: RollSummaryDTO) -> None:
-        self.roll_name_var.set(f"{summary.roll_name} (ID {summary.roll_id})")
+        self.roll_title_var.set(f"{summary.roll_name} (ID {summary.roll_id})")
         self.roll_machine_var.set(summary.machine)
         self.roll_fabric_var.set(summary.fabric or "-")
         self.roll_status_var.set(summary.status)
@@ -575,7 +590,7 @@ class OperationsPanel(ttk.Frame):
         self._populate_roll_items_tree(summary.items)
 
     def _clear_roll_panel(self) -> None:
-        self.roll_name_var.set("Nenhum rolo ativo")
+        self.roll_title_var.set("Nenhum rolo ativo")
         self.roll_machine_var.set("-")
         self.roll_fabric_var.set("-")
         self.roll_status_var.set("-")
@@ -619,8 +634,10 @@ class OperationsPanel(ttk.Frame):
                 values=(
                     item.row_id or "-",
                     item.job_id,
+                    item.machine,
                     item.fabric or "-",
                     item.review_status or "-",
+                    item.document,
                     self._fmt_num(item.consumed_length_m),
                 ),
             )

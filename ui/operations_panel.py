@@ -19,10 +19,10 @@ from ui.common_widgets import (
     fmt_m,
     fmt_num,
     meta_cell,
-    metric_cell,
 )
 from ui.roll_closure_dialog import RollClosureDialog
 from ui.roll_export_result_dialog import RollExportResultDialog
+from ui.roll_summary_panel import RollSummaryPanel
 from ui.workspace_layout import TwoRowWorkspace
 
 
@@ -327,33 +327,27 @@ class OperationsPanel(ttk.Frame):
         )
 
     def _build_summary_panel(self, master: tk.Misc) -> None:
-        panel = ttk.LabelFrame(master, text="Resumo", style="Section.TLabelframe", padding=8)
-        panel.grid(row=0, column=0, sticky="nsew")
-        panel.columnconfigure(0, weight=1)
-        panel.columnconfigure(1, weight=1)
-
-        metric_cell(panel, row=0, col=0, label="Jobs", variable=self.roll_jobs_var)
-        metric_cell(panel, row=0, col=1, label="Planejado", variable=self.roll_planned_var)
-        metric_cell(panel, row=1, col=0, label="Efetivo", variable=self.roll_effective_var)
-        metric_cell(panel, row=1, col=1, label="Gap", variable=self.roll_gap_var)
-        metric_cell(panel, row=2, col=0, label="Consumido", variable=self.roll_consumed_var)
-        metric_cell(panel, row=2, col=1, label="Pendentes", variable=self.roll_pending_var)
-        metric_cell(panel, row=3, col=0, label="Revisados OK", variable=self.roll_ok_var)
-        metric_cell(panel, row=3, col=1, label="Suspeitos", variable=self.roll_suspicious_var)
-
-        actions = ttk.Frame(panel)
-        actions.grid(row=4, column=0, columnspan=2, sticky="ew", pady=(12, 0))
-        actions.columnconfigure(0, weight=1)
-        actions.columnconfigure(1, weight=1)
-
-        ttk.Button(actions, text="Remover item", command=self.remove_selected_item_from_roll).grid(row=0, column=0, sticky="ew")
-        ttk.Button(actions, text="Exportar rolo", command=self.export_active_roll).grid(row=0, column=1, sticky="ew", padx=(8, 0))
-        ttk.Button(actions, text="Atualizar resumo", command=self.refresh_active_roll_summary).grid(
-            row=1, column=0, sticky="ew", pady=(8, 0)
+        self.summary_panel = RollSummaryPanel(
+            master,
+            width=SUMMARY_PANEL_WIDTH,
+            metrics=[
+                ("Jobs", self.roll_jobs_var),
+                ("Planejado", self.roll_planned_var),
+                ("Efetivo", self.roll_effective_var),
+                ("Gap", self.roll_gap_var),
+                ("Consumido", self.roll_consumed_var),
+                ("Pendentes", self.roll_pending_var),
+                ("Revisados OK", self.roll_ok_var),
+                ("Suspeitos", self.roll_suspicious_var),
+            ],
+            actions=[
+                ("Remover item", self.remove_selected_item_from_roll),
+                ("Exportar rolo", self.export_active_roll),
+                ("Atualizar resumo", self.refresh_active_roll_summary),
+                ("Ver detalhes", self.show_roll_detail_dialog),
+            ],
         )
-        ttk.Button(actions, text="Ver detalhes", command=self.show_roll_detail_dialog).grid(
-            row=1, column=1, sticky="ew", padx=(8, 0), pady=(8, 0)
-        )
+        self.summary_panel.grid(row=0, column=0, sticky="nsew")
 
     def clear_filters(self) -> None:
         self.machine_var.set("ALL")

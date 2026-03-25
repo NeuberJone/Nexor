@@ -102,6 +102,15 @@ class RollSummaryDTO:
 
 
 class OperationsPanelService:
+    """
+    Application service para o painel operacional local.
+
+    Responsabilidades:
+    - servir dados já prontos para a UI
+    - reaproveitar o núcleo validado
+    - evitar que a UI conheça detalhes do repository/export service
+    """
+
     def __init__(self, repository: ProductionRepository | None = None) -> None:
         self.repository = repository or ProductionRepository()
 

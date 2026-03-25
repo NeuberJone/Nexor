@@ -14,14 +14,13 @@ from application.operations_panel_service import (
 )
 from ui.common_widgets import (
     apply_common_styles,
-    clear_tree,
-    configure_tree_columns,
     fmt_m,
     fmt_num,
 )
 from ui.roll_export_result_dialog import RollExportResultDialog
 from ui.roll_items_panel import RollItemsPanel
 from ui.roll_summary_panel import RollSummaryPanel
+from ui.table_list_panel import TableListPanel
 from ui.workspace_layout import TwoRowWorkspace
 
 
@@ -115,40 +114,12 @@ class RollsPanel(ttk.Frame):
         self._build_summary_panel(self.workspace.right_panel)
 
     def _build_rolls_list_panel(self, master: tk.Misc) -> None:
-        panel = ttk.LabelFrame(master, text="Lista de rolos", style="Section.TLabelframe", padding=8)
-        panel.grid(row=0, column=0, sticky="nsew")
-        panel.columnconfigure(0, weight=1)
-        panel.rowconfigure(1, weight=1)
-
-        top = ttk.Frame(panel)
-        top.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        ttk.Label(top, text="Total visível:").pack(side="left")
-        ttk.Label(top, textvariable=self.rolls_count_var, style="MetricValue.TLabel").pack(side="left", padx=(6, 0))
-
-        tree_wrap = ttk.Frame(panel)
-        tree_wrap.grid(row=1, column=0, sticky="nsew")
-        tree_wrap.columnconfigure(0, weight=1)
-        tree_wrap.rowconfigure(0, weight=1)
-
-        self.rolls_tree = ttk.Treeview(
-            tree_wrap,
-            columns=("roll_id", "roll_name", "machine", "fabric", "jobs", "consumed", "status"),
-            show="headings",
-            selectmode="browse",
-        )
-        self.rolls_tree.grid(row=0, column=0, sticky="nsew")
-        self.rolls_tree.bind("<<TreeviewSelect>>", lambda event: self.load_selected_roll_detail())
-        self.rolls_tree.bind("<Double-1>", lambda event: self.load_selected_roll_detail())
-
-        sb_y = ttk.Scrollbar(tree_wrap, orient="vertical", command=self.rolls_tree.yview)
-        sb_y.grid(row=0, column=1, sticky="ns")
-        sb_x = ttk.Scrollbar(tree_wrap, orient="horizontal", command=self.rolls_tree.xview)
-        sb_x.grid(row=1, column=0, sticky="ew")
-        self.rolls_tree.configure(yscrollcommand=sb_y.set, xscrollcommand=sb_x.set)
-
-        configure_tree_columns(
-            self.rolls_tree,
-            {
+        self.rolls_panel = TableListPanel(
+            master,
+            panel_title="Lista de rolos",
+            count_label="Total visível:",
+            count_var=self.rolls_count_var,
+            tree_columns={
                 "roll_id": ("ID", 70),
                 "roll_name": ("Rolo", 220),
                 "machine": ("Máquina", 90),
@@ -157,8 +128,12 @@ class RollsPanel(ttk.Frame):
                 "consumed": ("Consumido (m)", 120),
                 "status": ("Status", 100),
             },
-            left_aligned={"roll_name", "fabric"},
+            left_aligned_columns={"roll_name", "fabric"},
         )
+        self.rolls_panel.grid(row=0, column=0, sticky="nsew")
+        self.rolls_tree = self.rolls_panel.tree
+        self.rolls_tree.bind("<<TreeviewSelect>>", lambda event: self.load_selected_roll_detail())
+        self.rolls_tree.bind("<Double-1>", lambda event: self.load_selected_roll_detail())
 
     def _build_selected_roll_panel(self, master: tk.Misc) -> None:
         self.roll_panel = RollItemsPanel(
@@ -305,7 +280,9 @@ class RollsPanel(ttk.Frame):
         messagebox.showinfo("Detalhes do rolo", text, parent=self)
 
     def _populate_rolls_tree(self, rows: Iterable[OpenRollRow]) -> None:
-        clear_tree(self.rolls_tree)
+        for item in self.rolls_tree.get_children():
+            self.rolls_tree.delete(item)
+
         for row in rows:
             self.rolls_tree.insert(
                 "",
@@ -369,7 +346,7 @@ class RollsPanel(ttk.Frame):
         self.roll_pending_var.set("0")
         self.roll_ok_var.set("0")
         self.roll_suspicious_var.set("0")
-        self._populate_roll_items_tree([])
+        self.roll_panel.clear_items()
 
     def _get_selected_roll_id(self) -> int | None:
         selection = self.rolls_tree.selection()

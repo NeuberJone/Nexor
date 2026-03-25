@@ -15,7 +15,6 @@ from application.operations_panel_service import (
 from ui.common_widgets import (
     apply_common_styles,
     clear_tree,
-    configure_tree_columns,
     fmt_m,
     fmt_num,
 )
@@ -23,6 +22,7 @@ from ui.roll_closure_dialog import RollClosureDialog
 from ui.roll_export_result_dialog import RollExportResultDialog
 from ui.roll_items_panel import RollItemsPanel
 from ui.roll_summary_panel import RollSummaryPanel
+from ui.table_list_panel import TableListPanel
 from ui.workspace_layout import TwoRowWorkspace
 
 
@@ -209,39 +209,12 @@ class OperationsPanel(ttk.Frame):
         self._build_summary_panel(self.workspace.right_panel)
 
     def _build_jobs_panel(self, master: tk.Misc) -> None:
-        panel = ttk.LabelFrame(master, text="Jobs disponíveis", style="Section.TLabelframe", padding=8)
-        panel.grid(row=0, column=0, sticky="nsew")
-        panel.columnconfigure(0, weight=1)
-        panel.rowconfigure(1, weight=1)
-
-        top = ttk.Frame(panel)
-        top.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        ttk.Label(top, text="Itens visíveis:").pack(side="left")
-        ttk.Label(top, textvariable=self.jobs_count_var, style="MetricValue.TLabel").pack(side="left", padx=(6, 0))
-
-        tree_wrap = ttk.Frame(panel)
-        tree_wrap.grid(row=1, column=0, sticky="nsew")
-        tree_wrap.columnconfigure(0, weight=1)
-        tree_wrap.rowconfigure(0, weight=1)
-
-        self.jobs_tree = ttk.Treeview(
-            tree_wrap,
-            columns=("row_id", "job_id", "machine", "fabric", "review", "document", "effective", "gap", "consumed", "sus"),
-            show="headings",
-            selectmode="browse",
-        )
-        self.jobs_tree.grid(row=0, column=0, sticky="nsew")
-        self.jobs_tree.bind("<Double-1>", lambda event: self.add_selected_job_to_active_roll())
-
-        sb_y = ttk.Scrollbar(tree_wrap, orient="vertical", command=self.jobs_tree.yview)
-        sb_y.grid(row=0, column=1, sticky="ns")
-        sb_x = ttk.Scrollbar(tree_wrap, orient="horizontal", command=self.jobs_tree.xview)
-        sb_x.grid(row=1, column=0, sticky="ew")
-        self.jobs_tree.configure(yscrollcommand=sb_y.set, xscrollcommand=sb_x.set)
-
-        configure_tree_columns(
-            self.jobs_tree,
-            {
+        self.jobs_panel = TableListPanel(
+            master,
+            panel_title="Jobs disponíveis",
+            count_label="Itens visíveis:",
+            count_var=self.jobs_count_var,
+            tree_columns={
                 "row_id": ("ID", 70),
                 "job_id": ("Job", 90),
                 "machine": ("Máquina", 90),
@@ -253,13 +226,15 @@ class OperationsPanel(ttk.Frame):
                 "consumed": ("Consumido (m)", 115),
                 "sus": ("Suspeito", 90),
             },
-            left_aligned={"fabric", "review", "document"},
+            left_aligned_columns={"fabric", "review", "document"},
+            footer_actions=[
+                ("Adicionar ao rolo ativo", self.add_selected_job_to_active_roll),
+                ("Atualizar jobs", self.refresh_jobs),
+            ],
         )
-
-        actions = ttk.Frame(panel)
-        actions.grid(row=2, column=0, sticky="ew", pady=(8, 0))
-        ttk.Button(actions, text="Adicionar ao rolo ativo", command=self.add_selected_job_to_active_roll).pack(side="left")
-        ttk.Button(actions, text="Atualizar jobs", command=self.refresh_jobs).pack(side="left", padx=(8, 0))
+        self.jobs_panel.grid(row=0, column=0, sticky="nsew")
+        self.jobs_tree = self.jobs_panel.tree
+        self.jobs_tree.bind("<Double-1>", lambda event: self.add_selected_job_to_active_roll())
 
     def _build_roll_panel(self, master: tk.Misc) -> None:
         self.roll_panel = RollItemsPanel(
@@ -615,17 +590,3 @@ class OperationsPanel(ttk.Frame):
         if not text or text.upper() == "ALL":
             return None
         return text
-
-
-def run_operations_panel(service: OperationsPanelService | None = None) -> None:
-    root = tk.Tk()
-    OperationsPanel(root, service=service)
-    root.mainloop()
-
-
-def main() -> None:
-    run_operations_panel()
-
-
-if __name__ == "__main__":
-    main()

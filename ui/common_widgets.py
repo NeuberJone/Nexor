@@ -8,6 +8,10 @@ TREE_ROW_HEIGHT = 26
 
 
 def apply_common_styles() -> None:
+    """
+    Aplica estilos compartilhados da UI local.
+    Pode ser chamado várias vezes sem problema.
+    """
     style = ttk.Style()
     try:
         style.theme_use("clam")

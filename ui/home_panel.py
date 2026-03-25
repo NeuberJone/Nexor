@@ -8,13 +8,14 @@ from application.operations_panel_service import (
     OperationsPanelService,
     RollListFilters,
 )
+from ui.common_widgets import apply_common_styles
 
 
 class HomePanel(ttk.Frame):
     """
-    Página Home do Nexor no modo content-only.
+    Página Home do Nexor em modo content-only.
 
-    O shell (sidebar, topbar, footer e ações rápidas globais)
+    O shell (sidebar, topbar, footer e ações globais)
     pertence ao MainWindow.
 
     Esta página mostra apenas:
@@ -38,15 +39,9 @@ class HomePanel(ttk.Frame):
         self.pending_review_var = tk.StringVar(value="0")
         self.suspicious_jobs_var = tk.StringVar(value="0")
 
-        self._configure_styles()
+        apply_common_styles()
         self._build_ui()
         self.refresh_all()
-
-    def _configure_styles(self) -> None:
-        style = ttk.Style()
-        style.configure("CardTitle.TLabel", font=("Segoe UI", 10))
-        style.configure("CardValue.TLabel", font=("Segoe UI", 18, "bold"))
-        style.configure("Section.TLabelframe.Label", font=("Segoe UI", 10, "bold"))
 
     def _build_ui(self) -> None:
         self.grid(row=0, column=0, sticky="nsew")
@@ -70,8 +65,8 @@ class HomePanel(ttk.Frame):
     def _card(self, master: tk.Misc, column: int, title: str, value_var: tk.StringVar) -> None:
         card = ttk.LabelFrame(master, text=title, style="Section.TLabelframe", padding=12)
         card.grid(row=0, column=column, sticky="ew", padx=(0 if column == 0 else 6, 0))
-        ttk.Label(card, textvariable=value_var, style="CardValue.TLabel").pack(anchor="w")
-        ttk.Label(card, text="Resumo operacional atual", style="CardTitle.TLabel").pack(anchor="w", pady=(4, 0))
+        ttk.Label(card, textvariable=value_var, style="MetricValue.TLabel").pack(anchor="w")
+        ttk.Label(card, text="Resumo operacional atual").pack(anchor="w", pady=(4, 0))
 
     def _build_main_content(self) -> None:
         content = ttk.Frame(self)
@@ -85,7 +80,7 @@ class HomePanel(ttk.Frame):
         left_text = (
             "A Home resume o estado atual da operação.\n\n"
             "Use a navegação lateral para entrar em Operação ou Rolos.\n\n"
-            "Ações rápidas globais ficam no shell principal, não dentro da página."
+            "Ações globais ficam no shell principal."
         )
         ttk.Label(left, text=left_text, wraplength=520, justify="left").grid(row=0, column=0, sticky="nw")
 

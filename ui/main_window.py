@@ -140,7 +140,11 @@ class MainWindow(ttk.Frame):
         text_box.grid(row=0, column=0, sticky="w")
 
         ttk.Label(text_box, textvariable=self.page_title_var, style="ShellTitle.TLabel").pack(anchor="w")
-        ttk.Label(text_box, textvariable=self.page_subtitle_var, style="ShellSubtitle.TLabel").pack(anchor="w", pady=(4, 0))
+        ttk.Label(
+            text_box,
+            textvariable=self.page_subtitle_var,
+            style="ShellSubtitle.TLabel",
+        ).pack(anchor="w", pady=(4, 0))
 
         actions = ttk.Frame(topbar)
         actions.grid(row=0, column=1, sticky="e")

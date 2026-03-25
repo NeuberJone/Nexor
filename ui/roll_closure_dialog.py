@@ -5,11 +5,12 @@ from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from application.operations_panel_service import OperationsPanelService, RollSummaryDTO
+from ui.common_widgets import apply_common_styles, fmt_m
 
 
 class RollClosureDialog(tk.Toplevel):
     """
-    Dialog de fechamento de rolo.
+    Diálogo de fechamento de rolo.
 
     Objetivo:
     - revisar os dados do rolo antes do fechamento
@@ -43,6 +44,7 @@ class RollClosureDialog(tk.Toplevel):
 
         self.columnconfigure(0, weight=1)
 
+        apply_common_styles()
         self._build_ui()
         self._center(master)
 
@@ -57,6 +59,7 @@ class RollClosureDialog(tk.Toplevel):
         self._build_header(root)
         self._build_roll_info(root)
         self._build_totals(root)
+        self._build_warning_box(root)
         self._build_note_box(root)
         self._build_export_options(root)
         self._build_actions(root)
@@ -69,16 +72,18 @@ class RollClosureDialog(tk.Toplevel):
         ttk.Label(
             box,
             text="Fechamento do rolo",
-            font=("Segoe UI", 12, "bold"),
+            style="PanelTitle.TLabel",
         ).grid(row=0, column=0, sticky="w")
 
         ttk.Label(
             box,
-            text="Revise os dados antes de concluir o fechamento.",
+            text="Revise os dados abaixo antes de concluir o fechamento.",
+            wraplength=620,
+            justify="left",
         ).grid(row=1, column=0, sticky="w", pady=(4, 0))
 
     def _build_roll_info(self, master: tk.Misc) -> None:
-        info = ttk.LabelFrame(master, text="Dados do rolo", padding=10)
+        info = ttk.LabelFrame(master, text="Dados do rolo", style="Section.TLabelframe", padding=10)
         info.grid(row=1, column=0, sticky="ew", pady=(0, 12))
         info.columnconfigure(1, weight=1)
 
@@ -90,34 +95,61 @@ class RollClosureDialog(tk.Toplevel):
         self._info_row(info, 5, "Jobs", str(self.summary.jobs_count))
 
     def _build_totals(self, master: tk.Misc) -> None:
-        box = ttk.LabelFrame(master, text="Resumo", padding=10)
+        box = ttk.LabelFrame(master, text="Resumo", style="Section.TLabelframe", padding=10)
         box.grid(row=2, column=0, sticky="ew", pady=(0, 12))
         box.columnconfigure(0, weight=1)
         box.columnconfigure(1, weight=1)
 
-        self._metric(box, 0, 0, "Planejado", self._fmt_m(self.summary.total_planned_m))
-        self._metric(box, 0, 1, "Efetivo", self._fmt_m(self.summary.total_effective_m))
-        self._metric(box, 1, 0, "Gap", self._fmt_m(self.summary.total_gap_m))
-        self._metric(box, 1, 1, "Consumido", self._fmt_m(self.summary.total_consumed_m))
+        self._metric(box, 0, 0, "Planejado", fmt_m(self.summary.total_planned_m))
+        self._metric(box, 0, 1, "Efetivo", fmt_m(self.summary.total_effective_m))
+        self._metric(box, 1, 0, "Gap", fmt_m(self.summary.total_gap_m))
+        self._metric(box, 1, 1, "Consumido", fmt_m(self.summary.total_consumed_m))
         self._metric(box, 2, 0, "Pendentes", str(self.summary.pending_review_count))
         self._metric(box, 2, 1, "Suspeitos", str(self.summary.suspicious_count))
 
-        if self.summary.pending_review_count > 0:
-            ttk.Label(
-                box,
-                text="Atenção: este rolo contém jobs com PENDING_REVIEW.",
-            ).grid(row=3, column=0, columnspan=2, sticky="w", pady=(10, 0))
+    def _build_warning_box(self, master: tk.Misc) -> None:
+        needs_attention = self.summary.pending_review_count > 0 or self.summary.suspicious_count > 0
+        title = "Atenção" if needs_attention else "Observação final"
+
+        box = ttk.LabelFrame(master, text=title, style="Section.TLabelframe", padding=10)
+        box.grid(row=3, column=0, sticky="ew", pady=(0, 12))
+        box.columnconfigure(0, weight=1)
+
+        if needs_attention:
+            parts: list[str] = []
+            if self.summary.pending_review_count > 0:
+                parts.append(
+                    f"- Este rolo contém {self.summary.pending_review_count} job(s) com PENDING_REVIEW."
+                )
+            if self.summary.suspicious_count > 0:
+                parts.append(
+                    f"- Este rolo contém {self.summary.suspicious_count} item(ns) marcado(s) como suspeito(s)."
+                )
+            parts.append("- Ao fechar, o rolo deixa de aceitar novas alterações operacionais.")
+            text = "\n".join(parts)
+        else:
+            text = (
+                "Nenhum alerta crítico foi identificado neste rolo.\n"
+                "Você pode fechar normalmente ou adicionar uma observação final."
+            )
+
+        ttk.Label(
+            box,
+            text=text,
+            wraplength=620,
+            justify="left",
+        ).grid(row=0, column=0, sticky="w")
 
     def _build_note_box(self, master: tk.Misc) -> None:
-        box = ttk.LabelFrame(master, text="Observação final", padding=10)
-        box.grid(row=3, column=0, sticky="ew", pady=(0, 12))
+        box = ttk.LabelFrame(master, text="Observação final", style="Section.TLabelframe", padding=10)
+        box.grid(row=4, column=0, sticky="ew", pady=(0, 12))
         box.columnconfigure(0, weight=1)
 
         ttk.Entry(box, textvariable=self.note_var).grid(row=0, column=0, sticky="ew")
 
     def _build_export_options(self, master: tk.Misc) -> None:
-        box = ttk.LabelFrame(master, text="Exportação", padding=10)
-        box.grid(row=4, column=0, sticky="ew", pady=(0, 12))
+        box = ttk.LabelFrame(master, text="Exportação", style="Section.TLabelframe", padding=10)
+        box.grid(row=5, column=0, sticky="ew", pady=(0, 12))
         box.columnconfigure(1, weight=1)
 
         ttk.Checkbutton(
@@ -128,6 +160,7 @@ class RollClosureDialog(tk.Toplevel):
         ).grid(row=0, column=0, columnspan=3, sticky="w")
 
         ttk.Label(box, text="Pasta:").grid(row=1, column=0, sticky="w", pady=(10, 0))
+
         self.export_dir_entry = ttk.Entry(box, textvariable=self.export_dir_var, state="disabled")
         self.export_dir_entry.grid(row=1, column=1, sticky="ew", padx=(8, 8), pady=(10, 0))
 
@@ -141,20 +174,28 @@ class RollClosureDialog(tk.Toplevel):
 
     def _build_actions(self, master: tk.Misc) -> None:
         actions = ttk.Frame(master)
-        actions.grid(row=5, column=0, sticky="e")
+        actions.grid(row=6, column=0, sticky="e")
 
         ttk.Button(actions, text="Cancelar", command=self.destroy).pack(side="right")
-        ttk.Button(actions, text="Fechar rolo", command=self._confirm).pack(side="right", padx=(0, 8))
+        ttk.Button(actions, text="Confirmar fechamento", command=self._confirm).pack(
+            side="right",
+            padx=(0, 8),
+        )
 
     def _info_row(self, master: tk.Misc, row: int, label: str, value: str) -> None:
         ttk.Label(master, text=f"{label}:").grid(row=row, column=0, sticky="nw", padx=(0, 8), pady=2)
-        ttk.Label(master, text=value).grid(row=row, column=1, sticky="w", pady=2)
+        ttk.Label(master, text=value, wraplength=420, justify="left").grid(
+            row=row,
+            column=1,
+            sticky="w",
+            pady=2,
+        )
 
     def _metric(self, master: tk.Misc, row: int, col: int, label: str, value: str) -> None:
         cell = ttk.Frame(master)
         cell.grid(row=row, column=col, sticky="ew", padx=4, pady=4)
         ttk.Label(cell, text=label).pack(anchor="w")
-        ttk.Label(cell, text=value, font=("Segoe UI", 10, "bold")).pack(anchor="w", pady=(2, 0))
+        ttk.Label(cell, text=value, style="MetricValue.TLabel").pack(anchor="w", pady=(2, 0))
 
     def _toggle_export_state(self) -> None:
         enabled = self.export_after_close_var.get()
@@ -252,7 +293,3 @@ class RollClosureDialog(tk.Toplevel):
         y = root_y + max((root_h - height) // 2, 0)
 
         self.geometry(f"+{x}+{y}")
-
-    @staticmethod
-    def _fmt_m(value: float | None) -> str:
-        return f"{float(value or 0.0):.2f} m"

@@ -694,7 +694,7 @@ class LogConsultorApp:
         right.rowconfigure(1, weight=1)
         right.columnconfigure(0, weight=1)
 
-        ttk.Label(right, text="Leitura amigável do log", font=("Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 6))
+        ttk.Label(right, text="Informações", font=("Segoe UI", 11, "bold")).grid(row=0, column=0, sticky="w", pady=(0, 6))
 
         self.notebook = ttk.Notebook(right)
         self.notebook.grid(row=1, column=0, sticky="nsew")
@@ -702,7 +702,7 @@ class LogConsultorApp:
         self.tab_friendly = ttk.Frame(self.notebook)
         self.tab_raw = ttk.Frame(self.notebook)
         self.tab_consolidated = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_friendly, text="Resumo amigável")
+        self.notebook.add(self.tab_friendly, text="Resumo")
         self.notebook.add(self.tab_raw, text="Campos brutos")
         self.notebook.add(self.tab_consolidated, text="Consolidado")
 
@@ -874,7 +874,7 @@ class LogConsultorApp:
         lines.append(f"- Computador de origem: {analysis.computer_name or '—'}")
         lines.append(f"- Driver / impressora: {analysis.driver or '—'}")
         lines.append(f"- Versão do software: {analysis.software_version or '—'}")
-        lines.append(f"- Arquivos no job: {analysis.file_count if analysis.file_count is not None else '—'}")
+        lines.append(f"- Arquivos no serviço: {analysis.file_count if analysis.file_count is not None else '—'}")
         lines.append(f"- Cópia atual / total de cópias: {analysis.copy if analysis.copy is not None else '—'} / {analysis.total_copies if analysis.total_copies is not None else '—'}")
         lines.append(f"- Itens encontrados no log: {analysis.item_count}")
         lines.append("")
@@ -889,7 +889,7 @@ class LogConsultorApp:
         lines.append("3) TAMANHOS E ESPAÇOS")
         lines.append(f"- Largura da página/papel configurado no log: {fmt_num(analysis.page_width_mm, 1, ' mm')} ({fmt_mm_as_m(analysis.page_width_mm)})")
         lines.append(f"- Largura útil de impressão: {fmt_num(analysis.print_width_mm, 1, ' mm')} ({fmt_mm_as_m(analysis.print_width_mm)})")
-        lines.append(f"- Altura total da área impressa do job: {fmt_num(analysis.print_height_mm, 1, ' mm')} ({fmt_mm_as_m(analysis.print_height_mm)})")
+        lines.append(f"- Altura total da área impressa do serviço: {fmt_num(analysis.print_height_mm, 1, ' mm')} ({fmt_mm_as_m(analysis.print_height_mm)})")
         if item:
             lines.append(f"- Largura real do item: {fmt_num(item.width_mm, 1, ' mm')} ({fmt_mm_as_m(item.width_mm)})")
             lines.append(f"- Altura real do item: {fmt_num(item.height_mm, 1, ' mm')} ({fmt_mm_as_m(item.height_mm)})")
@@ -1043,7 +1043,7 @@ class LogConsultorApp:
         lines.append(f"Tinta total estimada: {fmt_num(sum_or_none(valid_inks), 5, ' mL')}")
         lines.append(f"Tempo total de impressão: {fmt_duration(sum_or_none(valid_durations))}")
         avg_speed = (sum(valid_speeds) / len(valid_speeds)) if valid_speeds else None
-        lines.append(f"Velocidade média dos jobs: {fmt_num(avg_speed, 4, ' m/min')}")
+        lines.append(f"Velocidade média dos serviços: {fmt_num(avg_speed, 4, ' m/min')}")
         lines.append(f"Custo total estimado do papel: R$ {fmt_num(sum_or_none(valid_costs_paper), 4, '')}")
         lines.append(f"Custo total estimado de tinta: R$ {fmt_num(sum_or_none(valid_costs_ink), 4, '')}")
         lines.append(f"Custo total estimado geral: R$ {fmt_num(sum_or_none(valid_costs_total), 4, '')}")
@@ -1068,9 +1068,9 @@ class LogConsultorApp:
         append_ranking("DRIVERS ENCONTRADOS", driver_counts)
 
         lines.append("DESTAQUES")
-        lines.append(f"- Maior job em metragem: {longest.file_name} | {fmt_mm_as_m(longest.actual_print_length_mm)}")
-        lines.append(f"- Job com maior tinta: {most_ink.file_name} | {fmt_num(most_ink.total_ink_ml, 5, ' mL')}")
-        lines.append(f"- Job mais demorado: {slowest.file_name} | {fmt_duration(slowest.duration_seconds)}")
+        lines.append(f"- Maior serviço em metragem: {longest.file_name} | {fmt_mm_as_m(longest.actual_print_length_mm)}")
+        lines.append(f"- Serviço com maior tinta: {most_ink.file_name} | {fmt_num(most_ink.total_ink_ml, 5, ' mL')}")
+        lines.append(f"- Serviço mais demorado: {slowest.file_name} | {fmt_duration(slowest.duration_seconds)}")
         lines.append("")
 
         lines.append("POSSÍVEIS ALERTAS")
@@ -1109,7 +1109,7 @@ class LogConsultorApp:
                 messagebox.showinfo("Aviso", "Selecione um log primeiro.")
                 return
             default_name = Path(analysis.file_name).stem + "_relatorio.txt"
-            content = self.build_friendly_report(analysis) if current_tab == "Resumo amigável" else self.build_raw_report(analysis)
+            content = self.build_friendly_report(analysis) if current_tab == "Resumo" else self.build_raw_report(analysis)
         path = filedialog.asksaveasfilename(
             title="Salvar relatório",
             defaultextension=".txt",

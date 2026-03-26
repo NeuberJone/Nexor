@@ -113,11 +113,11 @@ def main() -> int:
     print("1) Rodar import completo:")
     print("   python app.py --force-rescan")
     print()
-    print("2) Conferir jobs disponíveis depois do import:")
-    print("   python app.py --list-jobs")
+    print("2) Gerar relatório do run mais recente:")
+    print("   python scripts/report_project_logs_import.py")
     print()
-    print("3) Conferir rolos existentes, se necessário:")
-    print("   python app.py --list-rolls")
+    print("3) Conferir jobs disponíveis depois do import:")
+    print("   python app.py --list-jobs")
 
     return 0
 

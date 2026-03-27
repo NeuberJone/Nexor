@@ -1,3 +1,11 @@
+# Arquivo: ui/workspace_layout.py
+#
+# Resumo do que este arquivo implementa:
+# - mantém o layout-base reutilizável das páginas Operação e Rolos
+# - adiciona helpers para ajustar pesos e largura lateral
+# - mantém a estrutura simples: left_top, left_bottom e right_panel
+# - evita duplicação de configuração de grid nas telas principais
+
 from __future__ import annotations
 
 import tkinter as tk
@@ -32,11 +40,13 @@ class TwoRowWorkspace(ttk.Frame):
         self.right_width = right_width
         self.column_gap = column_gap
         self.row_gap = row_gap
+        self.top_weight = top_weight
+        self.bottom_weight = bottom_weight
 
         self.columnconfigure(0, weight=1)
         self.columnconfigure(1, weight=0)
-        self.rowconfigure(0, weight=top_weight)
-        self.rowconfigure(1, weight=bottom_weight)
+        self.rowconfigure(0, weight=self.top_weight)
+        self.rowconfigure(1, weight=self.bottom_weight)
 
         self.left_top = ttk.Frame(self)
         self.left_top.grid(
@@ -64,3 +74,13 @@ class TwoRowWorkspace(ttk.Frame):
         self.right_panel.grid_propagate(False)
         self.right_panel.columnconfigure(0, weight=1)
         self.right_panel.rowconfigure(0, weight=1)
+
+    def set_right_width(self, width: int) -> None:
+        self.right_width = int(width)
+        self.right_panel.configure(width=self.right_width)
+
+    def set_row_weights(self, top_weight: int, bottom_weight: int) -> None:
+        self.top_weight = int(top_weight)
+        self.bottom_weight = int(bottom_weight)
+        self.rowconfigure(0, weight=self.top_weight)
+        self.rowconfigure(1, weight=self.bottom_weight)

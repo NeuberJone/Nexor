@@ -1,7 +1,10 @@
+# storage/log_sources_repository.py
+
 from __future__ import annotations
 
 import sqlite3
 from datetime import datetime
+from pathlib import Path
 
 from storage.database import get_connection
 
@@ -11,15 +14,15 @@ def _now_iso() -> str:
 
 
 class LogSourceRepository:
-    def __init__(self) -> None:
-        pass
+    def __init__(self, db_path: str | Path | None = None) -> None:
+        self.db_path = Path(db_path) if db_path is not None else None
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def connect(self) -> sqlite3.Connection:
-        conn = get_connection()
+        conn = get_connection(self.db_path)
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
@@ -356,7 +359,7 @@ class LogSourceRepository:
     def enable(self, source_id: int) -> None:
         self.set_enabled(source_id, True)
 
-    def update_last_scan_at(self, source_id):
+    def update_last_scan_at(self, source_id: int) -> None:
         conn = self.connect()
 
         try:
@@ -376,7 +379,7 @@ class LogSourceRepository:
         finally:
             conn.close()
 
-    def update_last_successful_mtime(self, source_id, mtime):
+    def update_last_successful_mtime(self, source_id: int, mtime: float) -> None:
         conn = self.connect()
 
         try:
@@ -414,6 +417,26 @@ class LogSourceRepository:
                 WHERE id = ?
                 """,
                 (source_id,),
+            )
+
+            conn.commit()
+        finally:
+            conn.close()
+
+    def touch_scan_started(self, source_id: int) -> None:
+        conn = self.connect()
+
+        try:
+            self.ensure_runtime_fields(conn)
+
+            conn.execute(
+                """
+                UPDATE log_sources
+                SET last_scan_at = ?,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (_now_iso(), source_id),
             )
 
             conn.commit()

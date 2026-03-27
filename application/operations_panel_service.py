@@ -5,7 +5,21 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from core.models import ROLL_OPEN
+from core.models import (
+    LOG_CONVERTED,
+    LOG_NEW,
+    LOG_NORMALIZATION_CONVERTED,
+    LOG_NORMALIZATION_PENDING,
+    LOG_NORMALIZATION_READY,
+    LOG_PARSE_DUPLICATED,
+    LOG_PARSE_IGNORED,
+    LOG_PARSE_INVALID,
+    LOG_PARSE_NEW,
+    LOG_PARSE_PARSED,
+    REVIEW_PENDING,
+    REVIEWED_OK,
+    ROLL_OPEN,
+)
 from exports.roll_export_service import export_closed_roll
 from storage.repository import ProductionRepository
 
@@ -23,6 +37,15 @@ class AvailableJobsFilters:
 class RollListFilters:
     status: str | None = None
     machine: str | None = None
+    search: str | None = None
+    limit: int | None = None
+
+
+@dataclass(slots=True)
+class LogQueueFilters:
+    status: str | None = None
+    parse_status: str | None = None
+    normalized_status: str | None = None
     search: str | None = None
     limit: int | None = None
 
@@ -77,6 +100,23 @@ class OpenRollRow:
 
 
 @dataclass(slots=True)
+class LogQueueRow:
+    log_id: int
+    source_name: str | None
+    source_path: str | None
+    machine_code_raw: str | None
+    captured_at: datetime | None
+    imported_at: datetime | None
+    status: str
+    parse_status: str
+    normalized_status: str
+    parse_error: str | None
+    job_id: int | None
+    is_actionable: bool
+    is_terminal: bool
+
+
+@dataclass(slots=True)
 class RollSummaryDTO:
     roll_id: int
     roll_name: str
@@ -101,6 +141,20 @@ class RollSummaryDTO:
     items: list[RollItemRow]
 
 
+@dataclass(slots=True)
+class OperationsSnapshotDTO:
+    available_jobs_count: int
+    suspicious_jobs_count: int
+    open_rolls_count: int
+    pending_logs_count: int
+    parsed_logs_count: int
+    ready_logs_count: int
+    converted_logs_count: int
+    invalid_logs_count: int
+    duplicated_logs_count: int
+    ignored_logs_count: int
+
+
 class OperationsPanelService:
     """
     Application service para o painel operacional local.
@@ -113,6 +167,10 @@ class OperationsPanelService:
 
     def __init__(self, repository: ProductionRepository | None = None) -> None:
         self.repository = repository or ProductionRepository()
+
+    # ------------------------------------------------------------------
+    # Available jobs
+    # ------------------------------------------------------------------
 
     def list_available_jobs(
         self,
@@ -128,6 +186,74 @@ class OperationsPanelService:
             limit=filters.limit,
         )
         return [self._map_available_job(job) for job in jobs]
+
+    def get_filter_values(self) -> dict[str, list[str]]:
+        jobs = self.list_available_jobs(AvailableJobsFilters(limit=None))
+
+        machines = sorted({row.machine for row in jobs if row.machine})
+        fabrics = sorted({row.fabric for row in jobs if row.fabric})
+        review_statuses = sorted({row.review_status for row in jobs if row.review_status})
+
+        return {
+            "machines": machines,
+            "fabrics": fabrics,
+            "review_statuses": review_statuses,
+        }
+
+    # ------------------------------------------------------------------
+    # Logs / operational queue
+    # ------------------------------------------------------------------
+
+    def list_log_queue(
+        self,
+        filters: LogQueueFilters | None = None,
+    ) -> list[LogQueueRow]:
+        filters = filters or LogQueueFilters()
+
+        logs = self.repository.list_logs(
+            status=_norm(filters.status),
+            parse_status=_norm(filters.parse_status),
+            normalized_status=_norm(filters.normalized_status),
+            limit=filters.limit,
+        )
+
+        rows = [self._map_log_queue_row(log) for log in logs]
+
+        if filters.search:
+            term = filters.search.strip().lower()
+            rows = [
+                row for row in rows
+                if _contains_search(
+                    term,
+                    row.log_id,
+                    row.source_name,
+                    row.source_path,
+                    row.machine_code_raw,
+                    row.status,
+                    row.parse_status,
+                    row.normalized_status,
+                    row.parse_error,
+                    row.job_id,
+                )
+            ]
+
+        return rows
+
+    def get_log_filter_values(self) -> dict[str, list[str]]:
+        rows = self.list_log_queue(LogQueueFilters(limit=None))
+
+        return {
+            "statuses": sorted({row.status for row in rows if row.status}),
+            "parse_statuses": sorted({row.parse_status for row in rows if row.parse_status}),
+            "normalized_statuses": sorted(
+                {row.normalized_status for row in rows if row.normalized_status}
+            ),
+            "machines": sorted({row.machine_code_raw for row in rows if row.machine_code_raw}),
+        }
+
+    # ------------------------------------------------------------------
+    # Rolls
+    # ------------------------------------------------------------------
 
     def list_rolls(
         self,
@@ -145,19 +271,16 @@ class OperationsPanelService:
             if filters.machine and row.machine.strip().upper() != filters.machine.strip().upper():
                 continue
 
-            if filters.search:
-                haystack = " ".join(
-                    [
-                        str(row.roll_id),
-                        str(row.roll_name or ""),
-                        str(row.machine or ""),
-                        str(row.fabric or ""),
-                        str(row.status or ""),
-                        str(row.note or ""),
-                    ]
-                ).lower()
-                if filters.search.strip().lower() not in haystack:
-                    continue
+            if filters.search and not _contains_search(
+                filters.search.strip().lower(),
+                row.roll_id,
+                row.roll_name,
+                row.machine,
+                row.fabric,
+                row.status,
+                row.note,
+            ):
+                continue
 
             rows.append(row)
 
@@ -168,6 +291,17 @@ class OperationsPanelService:
 
     def list_open_rolls(self) -> list[OpenRollRow]:
         return self.list_rolls(RollListFilters(status=ROLL_OPEN))
+
+    def get_roll_filter_values(self) -> dict[str, list[str]]:
+        rows = self.list_rolls(RollListFilters(limit=None))
+
+        statuses = sorted({row.status for row in rows if row.status})
+        machines = sorted({row.machine for row in rows if row.machine})
+
+        return {
+            "statuses": statuses,
+            "machines": machines,
+        }
 
     def create_roll(
         self,
@@ -188,6 +322,9 @@ class OperationsPanelService:
     def get_roll_summary(self, roll_id: int) -> RollSummaryDTO:
         summary = self.repository.get_roll_summary(roll_id)
         return self._map_roll_summary(summary)
+
+    def get_roll_detail(self, roll_id: int) -> RollSummaryDTO:
+        return self.get_roll_summary(roll_id)
 
     def add_job_to_roll(self, *, roll_id: int, job_row_id: int) -> RollSummaryDTO:
         self.repository.add_job_to_roll(
@@ -216,29 +353,61 @@ class OperationsPanelService:
             repository=self.repository,
         )
 
-    def get_filter_values(self) -> dict[str, list[str]]:
-        jobs = self.list_available_jobs(AvailableJobsFilters(limit=None))
+    # ------------------------------------------------------------------
+    # Dashboard / overview
+    # ------------------------------------------------------------------
 
-        machines = sorted({row.machine for row in jobs if row.machine})
-        fabrics = sorted({row.fabric for row in jobs if row.fabric})
-        review_statuses = sorted({row.review_status for row in jobs if row.review_status})
+    def get_operations_snapshot(self) -> OperationsSnapshotDTO:
+        available_jobs = self.repository.list_available_jobs(limit=None)
+        open_rolls = self.repository.list_rolls(status=ROLL_OPEN)
+        logs = self.repository.list_logs(limit=None)
 
-        return {
-            "machines": machines,
-            "fabrics": fabrics,
-            "review_statuses": review_statuses,
-        }
+        suspicious_jobs_count = sum(
+            1 for job in available_jobs
+            if bool(getattr(job, "suspicion_category", None) or getattr(job, "suspicion_reason", None))
+        )
 
-    def get_roll_filter_values(self) -> dict[str, list[str]]:
-        rows = self.list_rolls(RollListFilters(limit=None))
+        pending_logs_count = sum(
+            1 for log in logs if (getattr(log, "parse_status", "") or "").upper() == LOG_PARSE_NEW
+        )
+        parsed_logs_count = sum(
+            1 for log in logs if (getattr(log, "parse_status", "") or "").upper() == LOG_PARSE_PARSED
+        )
+        ready_logs_count = sum(
+            1 for log in logs
+            if (getattr(log, "normalized_status", "") or "").upper() == LOG_NORMALIZATION_READY
+        )
+        converted_logs_count = sum(
+            1 for log in logs
+            if (getattr(log, "normalized_status", "") or "").upper() == LOG_NORMALIZATION_CONVERTED
+            or (getattr(log, "status", "") or "").upper() == LOG_CONVERTED
+        )
+        invalid_logs_count = sum(
+            1 for log in logs if (getattr(log, "parse_status", "") or "").upper() == LOG_PARSE_INVALID
+        )
+        duplicated_logs_count = sum(
+            1 for log in logs if (getattr(log, "parse_status", "") or "").upper() == LOG_PARSE_DUPLICATED
+        )
+        ignored_logs_count = sum(
+            1 for log in logs if (getattr(log, "parse_status", "") or "").upper() == LOG_PARSE_IGNORED
+        )
 
-        statuses = sorted({row.status for row in rows if row.status})
-        machines = sorted({row.machine for row in rows if row.machine})
+        return OperationsSnapshotDTO(
+            available_jobs_count=len(available_jobs),
+            suspicious_jobs_count=suspicious_jobs_count,
+            open_rolls_count=len(open_rolls),
+            pending_logs_count=pending_logs_count,
+            parsed_logs_count=parsed_logs_count,
+            ready_logs_count=ready_logs_count,
+            converted_logs_count=converted_logs_count,
+            invalid_logs_count=invalid_logs_count,
+            duplicated_logs_count=duplicated_logs_count,
+            ignored_logs_count=ignored_logs_count,
+        )
 
-        return {
-            "statuses": statuses,
-            "machines": machines,
-        }
+    # ------------------------------------------------------------------
+    # Mapping
+    # ------------------------------------------------------------------
 
     def _map_available_job(self, job: Any) -> AvailableJobRow:
         return AvailableJobRow(
@@ -281,8 +450,8 @@ class OperationsPanelService:
         roll = summary["roll"]
         items = [self._map_roll_item(item) for item in summary.get("items", [])]
 
-        pending_review_count = sum(1 for item in items if item.review_status == "PENDING_REVIEW")
-        reviewed_ok_count = sum(1 for item in items if item.review_status == "REVIEWED_OK")
+        pending_review_count = sum(1 for item in items if item.review_status == REVIEW_PENDING)
+        reviewed_ok_count = sum(1 for item in items if item.review_status == REVIEWED_OK)
         suspicious_count = sum(1 for item in items if (item.metric_category or "").upper() != "OK")
 
         return RollSummaryDTO(
@@ -324,6 +493,29 @@ class OperationsPanelService:
             consumed_length_m=float(getattr(item, "consumed_length_m", 0.0) or 0.0),
         )
 
+    def _map_log_queue_row(self, log: Any) -> LogQueueRow:
+        status = str(getattr(log, "status", "") or LOG_NEW)
+        parse_status = str(getattr(log, "parse_status", "") or LOG_PARSE_NEW)
+        normalized_status = str(
+            getattr(log, "normalized_status", "") or LOG_NORMALIZATION_PENDING
+        )
+
+        return LogQueueRow(
+            log_id=int(getattr(log, "id")),
+            source_name=_blank_to_none(getattr(log, "source_name", None)),
+            source_path=_blank_to_none(getattr(log, "source_path", None)),
+            machine_code_raw=_blank_to_none(getattr(log, "machine_code_raw", None)),
+            captured_at=getattr(log, "captured_at", None),
+            imported_at=getattr(log, "imported_at", None),
+            status=status,
+            parse_status=parse_status,
+            normalized_status=normalized_status,
+            parse_error=_blank_to_none(getattr(log, "parse_error", None)),
+            job_id=getattr(log, "job_id", None),
+            is_actionable=bool(getattr(log, "is_actionable", False)),
+            is_terminal=bool(getattr(log, "is_terminal", False)),
+        )
+
 
 def _norm(value: str | None) -> str | None:
     text = (value or "").strip()
@@ -342,3 +534,8 @@ def _to_float_or_none(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _contains_search(term: str, *values: object) -> bool:
+    haystack = " ".join(str(value or "") for value in values).lower()
+    return term in haystack

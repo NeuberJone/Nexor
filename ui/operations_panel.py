@@ -8,7 +8,10 @@ from typing import Iterable
 from application.operations_panel_service import (
     AvailableJobRow,
     AvailableJobsFilters,
+    LogQueueFilters,
+    LogQueueRow,
     OperationsPanelService,
+    OperationsSnapshotDTO,
     RollItemRow,
     RollSummaryDTO,
 )
@@ -122,13 +125,34 @@ class OperationsPanel(ttk.Frame):
         self.active_roll_id: int | None = None
         self.current_summary: RollSummaryDTO | None = None
 
+        # Jobs filters
         self.machine_var = tk.StringVar(value="ALL")
         self.fabric_var = tk.StringVar(value="ALL")
         self.review_status_var = tk.StringVar(value="REVIEWED_OK")
         self.exclude_suspicious_var = tk.BooleanVar(value=False)
         self.search_var = tk.StringVar(value="")
 
+        # Logs filters
+        self.log_status_var = tk.StringVar(value="ALL")
+        self.log_parse_status_var = tk.StringVar(value="ALL")
+        self.log_normalized_status_var = tk.StringVar(value="ALL")
+        self.log_search_var = tk.StringVar(value="")
+
+        # Header metrics
+        self.snapshot_available_jobs_var = tk.StringVar(value="0")
+        self.snapshot_suspicious_jobs_var = tk.StringVar(value="0")
+        self.snapshot_open_rolls_var = tk.StringVar(value="0")
+        self.snapshot_pending_logs_var = tk.StringVar(value="0")
+        self.snapshot_ready_logs_var = tk.StringVar(value="0")
+        self.snapshot_converted_logs_var = tk.StringVar(value="0")
+        self.snapshot_invalid_logs_var = tk.StringVar(value="0")
+        self.snapshot_duplicated_logs_var = tk.StringVar(value="0")
+
+        # Counts
         self.jobs_count_var = tk.StringVar(value="0")
+        self.logs_count_var = tk.StringVar(value="0")
+
+        # Active roll summary vars
         self.roll_title_var = tk.StringVar(value="Nenhum rolo ativo")
         self.roll_machine_var = tk.StringVar(value="-")
         self.roll_fabric_var = tk.StringVar(value="-")
@@ -145,25 +169,35 @@ class OperationsPanel(ttk.Frame):
         self.roll_suspicious_var = tk.StringVar(value="0")
 
         self.jobs_tree: ttk.Treeview
+        self.logs_tree: ttk.Treeview
         self.roll_items_tree: ttk.Treeview
+
         self.machine_combo: ttk.Combobox
         self.fabric_combo: ttk.Combobox
         self.review_combo: ttk.Combobox
+        self.log_status_combo: ttk.Combobox
+        self.log_parse_combo: ttk.Combobox
+        self.log_normalized_combo: ttk.Combobox
 
         apply_common_styles()
         self._build_ui()
         self.refresh_all()
 
+    # ------------------------------------------------------------------
+    # Build
+    # ------------------------------------------------------------------
+
     def _build_ui(self) -> None:
         self.grid(row=0, column=0, sticky="nsew")
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(1, weight=1)
+        self.rowconfigure(2, weight=1)
 
         self._build_filters()
+        self._build_snapshot_bar()
         self._build_body()
 
     def _build_filters(self) -> None:
-        bar = ttk.LabelFrame(self, text="Filtros", style="Section.TLabelframe", padding=10)
+        bar = ttk.LabelFrame(self, text="Filtros de jobs", style="Section.TLabelframe", padding=10)
         bar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         for col in range(9):
             bar.columnconfigure(col, weight=1 if col in {1, 3, 5, 7} else 0)
@@ -192,8 +226,34 @@ class OperationsPanel(ttk.Frame):
         actions = ttk.Frame(bar)
         actions.grid(row=1, column=0, columnspan=9, sticky="e", pady=(10, 0))
         ttk.Button(actions, text="Limpar filtros", command=self.clear_filters).pack(side="right")
-        ttk.Button(actions, text="Atualizar", command=self.refresh_all).pack(side="right", padx=(0, 8))
+        ttk.Button(actions, text="Atualizar tudo", command=self.refresh_all).pack(side="right", padx=(0, 8))
         ttk.Button(actions, text="Aplicar filtros", command=self.refresh_jobs).pack(side="right", padx=(0, 8))
+
+    def _build_snapshot_bar(self) -> None:
+        box = ttk.LabelFrame(self, text="Visão geral operacional", style="Section.TLabelframe", padding=10)
+        box.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+
+        for col in range(4):
+            box.columnconfigure(col, weight=1)
+
+        metrics = [
+            ("Jobs disponíveis", self.snapshot_available_jobs_var),
+            ("Jobs suspeitos", self.snapshot_suspicious_jobs_var),
+            ("Rolos abertos", self.snapshot_open_rolls_var),
+            ("Logs pendentes", self.snapshot_pending_logs_var),
+            ("Logs prontos", self.snapshot_ready_logs_var),
+            ("Logs convertidos", self.snapshot_converted_logs_var),
+            ("Logs inválidos", self.snapshot_invalid_logs_var),
+            ("Logs duplicados", self.snapshot_duplicated_logs_var),
+        ]
+
+        for index, (label, value_var) in enumerate(metrics):
+            row = index // 4
+            col = index % 4
+            card = ttk.Frame(box, padding=(8, 6))
+            card.grid(row=row, column=col, sticky="nsew", padx=4, pady=4)
+            ttk.Label(card, text=label).pack(anchor="w")
+            ttk.Label(card, textvariable=value_var, style="MetricValue.TLabel").pack(anchor="w", pady=(2, 0))
 
     def _build_body(self) -> None:
         self.workspace = TwoRowWorkspace(
@@ -202,11 +262,32 @@ class OperationsPanel(ttk.Frame):
             top_weight=3,
             bottom_weight=2,
         )
-        self.workspace.grid(row=1, column=0, sticky="nsew")
+        self.workspace.grid(row=2, column=0, sticky="nsew")
 
-        self._build_jobs_panel(self.workspace.left_top)
+        self._build_top_left_tabs(self.workspace.left_top)
         self._build_roll_panel(self.workspace.left_bottom)
         self._build_summary_panel(self.workspace.right_panel)
+
+    def _build_top_left_tabs(self, master: tk.Misc) -> None:
+        master.columnconfigure(0, weight=1)
+        master.rowconfigure(0, weight=1)
+
+        notebook = ttk.Notebook(master)
+        notebook.grid(row=0, column=0, sticky="nsew")
+
+        jobs_tab = ttk.Frame(notebook)
+        jobs_tab.columnconfigure(0, weight=1)
+        jobs_tab.rowconfigure(0, weight=1)
+
+        logs_tab = ttk.Frame(notebook)
+        logs_tab.columnconfigure(0, weight=1)
+        logs_tab.rowconfigure(1, weight=1)
+
+        notebook.add(jobs_tab, text="Jobs disponíveis")
+        notebook.add(logs_tab, text="Fila de logs")
+
+        self._build_jobs_panel(jobs_tab)
+        self._build_logs_panel(logs_tab)
 
     def _build_jobs_panel(self, master: tk.Misc) -> None:
         self.jobs_panel = TableListPanel(
@@ -235,6 +316,62 @@ class OperationsPanel(ttk.Frame):
         self.jobs_panel.grid(row=0, column=0, sticky="nsew")
         self.jobs_tree = self.jobs_panel.tree
         self.jobs_tree.bind("<Double-1>", lambda event: self.add_selected_job_to_active_roll())
+
+    def _build_logs_panel(self, master: tk.Misc) -> None:
+        filters = ttk.Frame(master)
+        filters.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        for col in range(9):
+            filters.columnconfigure(col, weight=1 if col in {1, 3, 5, 7} else 0)
+
+        ttk.Label(filters, text="Status").grid(row=0, column=0, sticky="w", padx=(0, 6))
+        self.log_status_combo = ttk.Combobox(filters, textvariable=self.log_status_var, state="readonly")
+        self.log_status_combo.grid(row=0, column=1, sticky="ew", padx=(0, 12))
+
+        ttk.Label(filters, text="Parse").grid(row=0, column=2, sticky="w", padx=(0, 6))
+        self.log_parse_combo = ttk.Combobox(filters, textvariable=self.log_parse_status_var, state="readonly")
+        self.log_parse_combo.grid(row=0, column=3, sticky="ew", padx=(0, 12))
+
+        ttk.Label(filters, text="Normalização").grid(row=0, column=4, sticky="w", padx=(0, 6))
+        self.log_normalized_combo = ttk.Combobox(
+            filters,
+            textvariable=self.log_normalized_status_var,
+            state="readonly",
+        )
+        self.log_normalized_combo.grid(row=0, column=5, sticky="ew", padx=(0, 12))
+
+        ttk.Label(filters, text="Busca").grid(row=0, column=6, sticky="w", padx=(0, 6))
+        ttk.Entry(filters, textvariable=self.log_search_var).grid(row=0, column=7, sticky="ew", padx=(0, 12))
+
+        actions = ttk.Frame(filters)
+        actions.grid(row=0, column=8, sticky="e")
+        ttk.Button(actions, text="Limpar", command=self.clear_log_filters).pack(side="right")
+        ttk.Button(actions, text="Atualizar", command=self.refresh_logs).pack(side="right", padx=(0, 8))
+
+        self.logs_panel = TableListPanel(
+            master,
+            panel_title="Fila de logs",
+            count_label="Logs visíveis:",
+            count_var=self.logs_count_var,
+            tree_columns={
+                "log_id": ("ID", 70),
+                "source_name": ("Arquivo", 170),
+                "machine_raw": ("Máquina raw", 120),
+                "parse_status": ("Parse", 100),
+                "normalized_status": ("Normalização", 120),
+                "status": ("Legado", 100),
+                "captured_at": ("Capturado", 140),
+                "job_id": ("Job row", 90),
+                "error": ("Erro", 260),
+            },
+            left_aligned_columns={"source_name", "machine_raw", "parse_status", "normalized_status", "status", "error"},
+            footer_actions=[
+                ("Ver detalhe do log", self.show_selected_log_detail_dialog),
+                ("Atualizar logs", self.refresh_logs),
+            ],
+        )
+        self.logs_panel.grid(row=1, column=0, sticky="nsew")
+        self.logs_tree = self.logs_panel.tree
+        self.logs_tree.bind("<Double-1>", lambda event: self.show_selected_log_detail_dialog())
 
     def _build_roll_panel(self, master: tk.Misc) -> None:
         self.roll_panel = RollItemsPanel(
@@ -288,6 +425,10 @@ class OperationsPanel(ttk.Frame):
         )
         self.summary_panel.grid(row=0, column=0, sticky="nsew")
 
+    # ------------------------------------------------------------------
+    # Refresh / filter loading
+    # ------------------------------------------------------------------
+
     def clear_filters(self) -> None:
         self.machine_var.set("ALL")
         self.fabric_var.set("ALL")
@@ -296,10 +437,24 @@ class OperationsPanel(ttk.Frame):
         self.search_var.set("")
         self.refresh_jobs()
 
+    def clear_log_filters(self) -> None:
+        self.log_status_var.set("ALL")
+        self.log_parse_status_var.set("ALL")
+        self.log_normalized_status_var.set("ALL")
+        self.log_search_var.set("")
+        self.refresh_logs()
+
     def refresh_all(self) -> None:
         self._load_filter_values()
+        self._load_log_filter_values()
+        self.refresh_snapshot()
         self.refresh_jobs()
+        self.refresh_logs()
         self.refresh_active_roll_summary()
+
+    def refresh_snapshot(self) -> None:
+        snapshot = self.service.get_operations_snapshot()
+        self._apply_snapshot(snapshot)
 
     def _load_filter_values(self) -> None:
         values = self.service.get_filter_values()
@@ -319,6 +474,24 @@ class OperationsPanel(ttk.Frame):
         if self.review_status_var.get() not in review_values:
             self.review_status_var.set("REVIEWED_OK" if "REVIEWED_OK" in review_values else "ALL")
 
+    def _load_log_filter_values(self) -> None:
+        values = self.service.get_log_filter_values()
+
+        status_values = ["ALL", *values.get("statuses", [])]
+        parse_values = ["ALL", *values.get("parse_statuses", [])]
+        normalized_values = ["ALL", *values.get("normalized_statuses", [])]
+
+        self.log_status_combo["values"] = status_values
+        self.log_parse_combo["values"] = parse_values
+        self.log_normalized_combo["values"] = normalized_values
+
+        if self.log_status_var.get() not in status_values:
+            self.log_status_var.set("ALL")
+        if self.log_parse_status_var.get() not in parse_values:
+            self.log_parse_status_var.set("ALL")
+        if self.log_normalized_status_var.get() not in normalized_values:
+            self.log_normalized_status_var.set("ALL")
+
     def refresh_jobs(self) -> None:
         filters = AvailableJobsFilters(
             machine=self._none_if_all(self.machine_var.get()),
@@ -332,6 +505,18 @@ class OperationsPanel(ttk.Frame):
         jobs = self._apply_text_search(jobs, self.search_var.get())
         self._populate_jobs_tree(jobs)
         self.jobs_count_var.set(str(len(jobs)))
+
+    def refresh_logs(self) -> None:
+        filters = LogQueueFilters(
+            status=self._none_if_all(self.log_status_var.get()),
+            parse_status=self._none_if_all(self.log_parse_status_var.get()),
+            normalized_status=self._none_if_all(self.log_normalized_status_var.get()),
+            search=(self.log_search_var.get() or "").strip() or None,
+            limit=None,
+        )
+        logs = self.service.list_log_queue(filters)
+        self._populate_logs_tree(logs)
+        self.logs_count_var.set(str(len(logs)))
 
     def refresh_active_roll_summary(self) -> None:
         open_rolls = self.service.list_open_rolls()
@@ -349,6 +534,10 @@ class OperationsPanel(ttk.Frame):
         summary = self.service.get_roll_summary(self.active_roll_id)
         self.current_summary = summary
         self._apply_summary(summary)
+
+    # ------------------------------------------------------------------
+    # Roll actions
+    # ------------------------------------------------------------------
 
     def create_roll(self) -> None:
         dialog = CreateRollDialog(self.winfo_toplevel())
@@ -381,6 +570,7 @@ class OperationsPanel(ttk.Frame):
         self.current_summary = summary
         self._apply_summary(summary)
         self.refresh_jobs()
+        self.refresh_snapshot()
 
         if summary.pending_review_count > 0:
             messagebox.showwarning(
@@ -411,6 +601,7 @@ class OperationsPanel(ttk.Frame):
         self.current_summary = summary
         self._apply_summary(summary)
         self.refresh_jobs()
+        self.refresh_snapshot()
 
     def close_active_roll(self) -> None:
         if self.current_summary is None or self.active_roll_id is None:
@@ -441,6 +632,8 @@ class OperationsPanel(ttk.Frame):
             )
 
         self.refresh_jobs()
+        self.refresh_logs()
+        self.refresh_snapshot()
         self.refresh_active_roll_summary()
 
     def export_active_roll(self) -> None:
@@ -456,6 +649,10 @@ class OperationsPanel(ttk.Frame):
         result_dialog = RollExportResultDialog(self.winfo_toplevel(), result=result)
         self.wait_window(result_dialog)
         self.refresh_active_roll_summary()
+
+    # ------------------------------------------------------------------
+    # Detail dialogs
+    # ------------------------------------------------------------------
 
     def show_roll_detail_dialog(self) -> None:
         if self.current_summary is None:
@@ -480,6 +677,43 @@ class OperationsPanel(ttk.Frame):
             f"Observação: {s.note or '-'}"
         )
         messagebox.showinfo("Detalhes do rolo", text, parent=self)
+
+    def show_selected_log_detail_dialog(self) -> None:
+        selection = self.logs_tree.selection()
+        if not selection:
+            messagebox.showinfo("Fila de logs", "Selecione um log para visualizar.", parent=self)
+            return
+
+        values = self.logs_tree.item(selection[0], "values")
+        if not values:
+            return
+
+        text = (
+            f"Log ID: {values[0]}\n"
+            f"Arquivo: {values[1]}\n"
+            f"Máquina raw: {values[2]}\n"
+            f"Parse: {values[3]}\n"
+            f"Normalização: {values[4]}\n"
+            f"Legado: {values[5]}\n"
+            f"Capturado: {values[6]}\n"
+            f"Job row: {values[7]}\n"
+            f"Erro: {values[8]}"
+        )
+        messagebox.showinfo("Detalhe do log", text, parent=self)
+
+    # ------------------------------------------------------------------
+    # Apply state to UI
+    # ------------------------------------------------------------------
+
+    def _apply_snapshot(self, snapshot: OperationsSnapshotDTO) -> None:
+        self.snapshot_available_jobs_var.set(str(snapshot.available_jobs_count))
+        self.snapshot_suspicious_jobs_var.set(str(snapshot.suspicious_jobs_count))
+        self.snapshot_open_rolls_var.set(str(snapshot.open_rolls_count))
+        self.snapshot_pending_logs_var.set(str(snapshot.pending_logs_count))
+        self.snapshot_ready_logs_var.set(str(snapshot.ready_logs_count))
+        self.snapshot_converted_logs_var.set(str(snapshot.converted_logs_count))
+        self.snapshot_invalid_logs_var.set(str(snapshot.invalid_logs_count))
+        self.snapshot_duplicated_logs_var.set(str(snapshot.duplicated_logs_count))
 
     def _apply_summary(self, summary: RollSummaryDTO) -> None:
         self.roll_title_var.set(f"{summary.roll_name} (ID {summary.roll_id})")
@@ -515,6 +749,10 @@ class OperationsPanel(ttk.Frame):
         self.roll_suspicious_var.set("0")
         self._populate_roll_items_tree([])
 
+    # ------------------------------------------------------------------
+    # Tree population
+    # ------------------------------------------------------------------
+
     def _populate_jobs_tree(self, jobs: Iterable[AvailableJobRow]) -> None:
         clear_tree(self.jobs_tree)
         for row in jobs:
@@ -535,6 +773,25 @@ class OperationsPanel(ttk.Frame):
                 ),
             )
 
+    def _populate_logs_tree(self, logs: Iterable[LogQueueRow]) -> None:
+        clear_tree(self.logs_tree)
+        for row in logs:
+            self.logs_tree.insert(
+                "",
+                "end",
+                values=(
+                    row.log_id,
+                    row.source_name or "-",
+                    row.machine_code_raw or "-",
+                    row.parse_status,
+                    row.normalized_status,
+                    row.status,
+                    _fmt_dt(row.captured_at),
+                    row.job_id or "-",
+                    row.parse_error or "-",
+                ),
+            )
+
     def _populate_roll_items_tree(self, items: Iterable[RollItemRow]) -> None:
         rows = []
         for item in items:
@@ -550,6 +807,10 @@ class OperationsPanel(ttk.Frame):
                 )
             )
         self.roll_panel.set_items(rows)
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
     def _apply_text_search(self, jobs: list[AvailableJobRow], text: str) -> list[AvailableJobRow]:
         term = (text or "").strip().lower()
@@ -590,3 +851,19 @@ class OperationsPanel(ttk.Frame):
         if not text or text.upper() == "ALL":
             return None
         return text
+
+
+def _fmt_dt(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    if hasattr(value, "strftime"):
+        try:
+            return value.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return str(value)
+    return str(value or "-")
+
+
+def _contains_search(term: str, *values: object) -> bool:
+    haystack = " ".join(str(value or "") for value in values).lower()
+    return term in haystack

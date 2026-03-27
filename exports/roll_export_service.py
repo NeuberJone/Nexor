@@ -1,3 +1,12 @@
+# Arquivo: exports/roll_export_service.py
+#
+# Resumo do que este arquivo implementa:
+# - valida se o rolo pode ser exportado
+# - monta um payload único para PDF/JPG
+# - inclui eficiência, datas e observação no resumo exportado
+# - mantém fallback para JPG simples caso Pillow não esteja disponível
+# - continua marcando o rolo como EXPORTED após exportar
+
 from __future__ import annotations
 
 import base64
@@ -70,6 +79,7 @@ def export_closed_roll(
         "total_effective_m": payload["total_effective_m"],
         "total_gap_m": payload["total_gap_m"],
         "total_consumed_m": payload["total_consumed_m"],
+        "efficiency_ratio": payload["efficiency_ratio"],
         "status": exported_roll.status if exported_roll else ROLL_EXPORTED,
     }
 
@@ -83,18 +93,25 @@ def _build_export_payload(summary: dict) -> dict:
     total_effective_m = float(summary["total_effective_m"] or 0.0)
     total_gap_m = float(summary["total_gap_m"] or 0.0)
     total_consumed_m = float(summary["total_consumed_m"] or 0.0)
+    efficiency_ratio = summary.get("efficiency_ratio")
+    note = getattr(roll, "note", None)
 
     lines = [
-        f"Nexor Roll Export",
+        "Nexor Roll Export",
         f"Roll: {roll.roll_name}",
         f"Machine: {roll.machine}",
         f"Fabric: {roll.fabric or '-'}",
         f"Status: {roll.status}",
+        f"Created at: {_fmt_dt(getattr(roll, 'created_at', None))}",
+        f"Closed at: {_fmt_dt(getattr(roll, 'closed_at', None))}",
+        f"Exported at: {_fmt_dt(getattr(roll, 'exported_at', None))}",
         f"Jobs: {jobs_count}",
         f"Total planned (m): {_fmt_m(total_planned_m)}",
         f"Total effective (m): {_fmt_m(total_effective_m)}",
         f"Total gap (m): {_fmt_m(total_gap_m)}",
         f"Total consumed (m): {_fmt_m(total_consumed_m)}",
+        f"Efficiency: {_fmt_efficiency(efficiency_ratio)}",
+        f"Note: {note or '-'}",
         "",
         "Items:",
     ]
@@ -102,6 +119,7 @@ def _build_export_payload(summary: dict) -> dict:
     for index, item in enumerate(items, start=1):
         lines.append(
             f"{index:02d}. {item.job_id} | {item.document} | "
+            f"rev={getattr(item, 'review_status', '-') or '-'} | "
             f"eff={_fmt_m(item.effective_printed_length_m)}m | "
             f"gap={_fmt_m(item.gap_before_m)}m | "
             f"cons={_fmt_m(item.consumed_length_m)}m"
@@ -114,11 +132,32 @@ def _build_export_payload(summary: dict) -> dict:
         "total_effective_m": total_effective_m,
         "total_gap_m": total_gap_m,
         "total_consumed_m": total_consumed_m,
+        "efficiency_ratio": efficiency_ratio,
     }
 
 
 def _fmt_m(value: float) -> str:
     return f"{float(value or 0.0):.3f}"
+
+
+def _fmt_efficiency(value: float | None) -> str:
+    if value is None:
+        return "-"
+    try:
+        return f"{float(value) * 100:.1f}%"
+    except (TypeError, ValueError):
+        return "-"
+
+
+def _fmt_dt(value: object) -> str:
+    if value is None:
+        return "-"
+    if hasattr(value, "strftime"):
+        try:
+            return value.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return str(value)
+    return str(value)
 
 
 def _sanitize_filename(value: str) -> str:

@@ -6,9 +6,9 @@ from tkinter import messagebox, ttk
 from typing import Callable
 
 from application.operations_panel_service import (
-    AvailableJobsFilters,
     OpenRollRow,
     OperationsPanelService,
+    OperationsSnapshotDTO,
     RollListFilters,
 )
 from ui.common_widgets import apply_common_styles
@@ -53,6 +53,10 @@ class HomePanel(ttk.Frame):
         apply_common_styles()
         self._build_ui()
         self.refresh_all()
+
+    # ------------------------------------------------------------------
+    # Build
+    # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
         self.grid(row=0, column=0, sticky="nsew")
@@ -120,7 +124,7 @@ class HomePanel(ttk.Frame):
         self._card(
             cards,
             column=3,
-            title="Alertas / suspeitas",
+            title="Alertas operacionais",
             value_var=self.alerts_var,
             subtitle_var=self.alerts_sub_var,
         )
@@ -208,69 +212,27 @@ class HomePanel(ttk.Frame):
             justify="left",
         ).grid(row=0, column=0, sticky="nw")
 
+    # ------------------------------------------------------------------
+    # Refresh
+    # ------------------------------------------------------------------
+
     def refresh_all(self) -> None:
         try:
-            all_jobs = self.service.list_available_jobs(AvailableJobsFilters(limit=None))
+            snapshot = self.service.get_operations_snapshot()
             all_rolls = self.service.list_rolls(RollListFilters(limit=None))
-
-            pending_review = 0
-            suspicious_jobs = 0
-
-            for row in all_jobs:
-                if row.review_status == "PENDING_REVIEW":
-                    pending_review += 1
-                if row.is_suspicious:
-                    suspicious_jobs += 1
-
-            open_rolls = [r for r in all_rolls if (r.status or "").upper() == "OPEN"]
             last_closed = self._pick_last_closed_roll(all_rolls)
 
-            self.available_jobs_var.set(str(len(all_jobs)))
-            if pending_review > 0:
-                self.available_jobs_sub_var.set(f"{pending_review} pendente(s) de review")
-            else:
-                self.available_jobs_sub_var.set("Jobs prontos para uso")
-
-            self.open_rolls_var.set(str(len(open_rolls)))
-            if open_rolls:
-                self.open_rolls_sub_var.set("Há rolos aguardando montagem/fechamento")
-            else:
-                self.open_rolls_sub_var.set("Sem rolos em aberto")
-
-            if last_closed is None:
-                self.last_closed_var.set("Nenhum")
-                self.last_closed_sub_var.set("Nenhum rolo fechado ainda")
-            else:
-                self.last_closed_var.set(last_closed.roll_name)
-                created_txt = self._fmt_dt(last_closed.created_at)
-                self.last_closed_sub_var.set(
-                    f"{last_closed.machine} • {last_closed.fabric or 'Sem tecido'} • {created_txt}"
-                )
-
-            total_alerts = pending_review + suspicious_jobs
-            self.alerts_var.set(str(total_alerts))
-            if total_alerts == 0:
-                self.alerts_sub_var.set("Sem alertas no momento")
-            else:
-                self.alerts_sub_var.set(
-                    f"{suspicious_jobs} suspeito(s) • {pending_review} pendente(s)"
-                )
-
+            self._apply_snapshot_cards(snapshot, last_closed)
             self.recent_summary_var.set(
                 self._build_recent_summary_text(
-                    jobs_count=len(all_jobs),
-                    open_rolls_count=len(open_rolls),
-                    pending_review=pending_review,
-                    suspicious_jobs=suspicious_jobs,
+                    snapshot=snapshot,
                     last_closed=last_closed,
                 )
             )
             self.next_action_var.set(
                 self._build_next_action_text(
-                    open_rolls_count=len(open_rolls),
-                    pending_review=pending_review,
-                    suspicious_jobs=suspicious_jobs,
-                    jobs_count=len(all_jobs),
+                    snapshot=snapshot,
+                    last_closed=last_closed,
                 )
             )
 
@@ -281,21 +243,73 @@ class HomePanel(ttk.Frame):
                 parent=self,
             )
 
+    def _apply_snapshot_cards(
+        self,
+        snapshot: OperationsSnapshotDTO,
+        last_closed: OpenRollRow | None,
+    ) -> None:
+        self.available_jobs_var.set(str(snapshot.available_jobs_count))
+        if snapshot.suspicious_jobs_count > 0:
+            self.available_jobs_sub_var.set(
+                f"{snapshot.suspicious_jobs_count} suspeito(s) entre os jobs disponíveis"
+            )
+        else:
+            self.available_jobs_sub_var.set("Jobs prontos para uso")
+
+        self.open_rolls_var.set(str(snapshot.open_rolls_count))
+        if snapshot.open_rolls_count > 0:
+            self.open_rolls_sub_var.set("Há rolos aguardando montagem ou fechamento")
+        else:
+            self.open_rolls_sub_var.set("Sem rolos em aberto")
+
+        if last_closed is None:
+            self.last_closed_var.set("Nenhum")
+            self.last_closed_sub_var.set("Nenhum rolo fechado ainda")
+        else:
+            self.last_closed_var.set(last_closed.roll_name)
+            self.last_closed_sub_var.set(
+                f"{last_closed.machine} • {last_closed.fabric or 'Sem tecido'} • {self._fmt_dt(last_closed.created_at)}"
+            )
+
+        total_alerts = (
+            snapshot.suspicious_jobs_count
+            + snapshot.invalid_logs_count
+            + snapshot.pending_logs_count
+        )
+        self.alerts_var.set(str(total_alerts))
+
+        if total_alerts <= 0:
+            self.alerts_sub_var.set("Sem alertas no momento")
+        else:
+            parts: list[str] = []
+            if snapshot.suspicious_jobs_count > 0:
+                parts.append(f"{snapshot.suspicious_jobs_count} suspeito(s)")
+            if snapshot.pending_logs_count > 0:
+                parts.append(f"{snapshot.pending_logs_count} log(s) pendente(s)")
+            if snapshot.invalid_logs_count > 0:
+                parts.append(f"{snapshot.invalid_logs_count} inválido(s)")
+            self.alerts_sub_var.set(" • ".join(parts))
+
+    # ------------------------------------------------------------------
+    # Text builders
+    # ------------------------------------------------------------------
+
     def _build_recent_summary_text(
         self,
         *,
-        jobs_count: int,
-        open_rolls_count: int,
-        pending_review: int,
-        suspicious_jobs: int,
+        snapshot: OperationsSnapshotDTO,
         last_closed: OpenRollRow | None,
     ) -> str:
         lines: list[str] = []
 
-        lines.append(f"Jobs disponíveis agora: {jobs_count}")
-        lines.append(f"Rolos em aberto: {open_rolls_count}")
-        lines.append(f"Pendentes de review: {pending_review}")
-        lines.append(f"Jobs suspeitos: {suspicious_jobs}")
+        lines.append(f"Jobs disponíveis agora: {snapshot.available_jobs_count}")
+        lines.append(f"Jobs suspeitos: {snapshot.suspicious_jobs_count}")
+        lines.append(f"Rolos em aberto: {snapshot.open_rolls_count}")
+        lines.append(f"Logs pendentes de parse/importação: {snapshot.pending_logs_count}")
+        lines.append(f"Logs prontos para normalização/uso: {snapshot.ready_logs_count}")
+        lines.append(f"Logs convertidos em job: {snapshot.converted_logs_count}")
+        lines.append(f"Logs inválidos: {snapshot.invalid_logs_count}")
+        lines.append(f"Logs duplicados: {snapshot.duplicated_logs_count}")
 
         if last_closed is None:
             lines.append("Último rolo fechado: nenhum registro encontrado ainda.")
@@ -307,33 +321,41 @@ class HomePanel(ttk.Frame):
                 f"{self._fmt_dt(last_closed.created_at)}"
             )
 
-        if open_rolls_count > 0:
-            lines.append("")
+        lines.append("")
+        if snapshot.open_rolls_count > 0:
             lines.append("Há rolos em aberto. O caminho mais natural agora é entrar em Operação.")
-        elif jobs_count > 0:
-            lines.append("")
+        elif snapshot.available_jobs_count > 0:
             lines.append("Há jobs disponíveis para começar uma nova montagem de rolo.")
+        elif snapshot.pending_logs_count > 0:
+            lines.append("Ainda existem logs pendentes; vale conferir a fila antes de concluir que não há trabalho.")
         else:
-            lines.append("")
-            lines.append("Não há jobs disponíveis no momento. A próxima ação tende a ser consulta ou conferência.")
+            lines.append("Não há pressão operacional imediata. O melhor uso da Home agora é consulta rápida do estado.")
 
         return "\n".join(lines)
 
     def _build_next_action_text(
         self,
         *,
-        open_rolls_count: int,
-        pending_review: int,
-        suspicious_jobs: int,
-        jobs_count: int,
+        snapshot: OperationsSnapshotDTO,
+        last_closed: OpenRollRow | None,
     ) -> str:
-        if pending_review > 0 or suspicious_jobs > 0:
-            return "Entrar em Operação e revisar os itens pendentes/suspeitos antes de avançar."
-        if open_rolls_count > 0:
+        if snapshot.invalid_logs_count > 0:
+            return "Conferir a fila de logs na Operação, porque existem registros inválidos que podem esconder erro de origem."
+        if snapshot.suspicious_jobs_count > 0:
+            return "Entrar em Operação e revisar os jobs suspeitos antes de avançar para um fechamento novo."
+        if snapshot.open_rolls_count > 0:
             return "Retomar a montagem ou fechar um dos rolos em aberto."
-        if jobs_count > 0:
+        if snapshot.available_jobs_count > 0:
             return "Iniciar um novo fechamento de rolo a partir dos jobs disponíveis."
-        return "Consultar Rolos para revisão histórica ou aguardar nova entrada operacional."
+        if snapshot.pending_logs_count > 0:
+            return "Entrar em Operação e conferir a fila de logs pendentes."
+        if last_closed is not None:
+            return "Consultar Rolos para revisão histórica ou exportação adicional, se necessário."
+        return "Aguardar nova entrada operacional ou usar a consulta de rolos para inspeção histórica."
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
     def _pick_last_closed_roll(self, rolls: list[OpenRollRow]) -> OpenRollRow | None:
         closed_rolls = [r for r in rolls if (r.status or "").upper() != "OPEN"]

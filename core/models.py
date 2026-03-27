@@ -12,13 +12,29 @@ REVIEWED_PARTIAL = "REVIEWED_PARTIAL"
 REVIEWED_FAILED = "REVIEWED_FAILED"
 
 # ---------------------------------------------------------------------------
-# Log status constants
+# Explicit log parse statuses
 # ---------------------------------------------------------------------------
-LOG_NEW = "NEW"
-LOG_PARSED = "PARSED"
-LOG_INVALID = "INVALID"
-LOG_DUPLICATED = "DUPLICATED"
-LOG_IGNORED = "IGNORED"
+LOG_PARSE_NEW = "NEW"
+LOG_PARSE_PARSED = "PARSED"
+LOG_PARSE_INVALID = "INVALID"
+LOG_PARSE_DUPLICATED = "DUPLICATED"
+LOG_PARSE_IGNORED = "IGNORED"
+
+# ---------------------------------------------------------------------------
+# Explicit log normalization statuses
+# ---------------------------------------------------------------------------
+LOG_NORMALIZATION_PENDING = "PENDING"
+LOG_NORMALIZATION_READY = "READY"
+LOG_NORMALIZATION_CONVERTED = "CONVERTED"
+
+# ---------------------------------------------------------------------------
+# Legacy log status aliases (kept for compatibility)
+# ---------------------------------------------------------------------------
+LOG_NEW = LOG_PARSE_NEW
+LOG_PARSED = LOG_PARSE_PARSED
+LOG_INVALID = LOG_PARSE_INVALID
+LOG_DUPLICATED = LOG_PARSE_DUPLICATED
+LOG_IGNORED = LOG_PARSE_IGNORED
 LOG_CONVERTED = "CONVERTED"
 
 # ---------------------------------------------------------------------------
@@ -42,6 +58,73 @@ JOB_IGNORED = "IGNORED"
 JOB_CORRECTED = "CORRECTED"
 
 
+def resolve_log_status_parts(
+    status: str | None = None,
+    parse_status: str | None = None,
+    normalized_status: str | None = None,
+) -> tuple[str, str, str]:
+    """
+    Resolve legacy log status + explicit parse/normalization statuses
+    into a coherent triple:
+
+        (legacy_status, parse_status, normalized_status)
+
+    Compatibility rules:
+    - legacy CONVERTED => parse_status=PARSED, normalized_status=CONVERTED
+    - legacy PARSED    => parse_status=PARSED, normalized_status=READY
+    - legacy NEW       => parse_status=NEW, normalized_status=PENDING
+    - terminal parse statuses remain terminal in legacy status
+    """
+
+    legacy = (status or "").strip().upper()
+    parse_value = (parse_status or "").strip().upper()
+    normalized_value = (normalized_status or "").strip().upper()
+
+    if legacy == LOG_CONVERTED:
+        if not parse_value:
+            parse_value = LOG_PARSE_PARSED
+        if not normalized_value:
+            normalized_value = LOG_NORMALIZATION_CONVERTED
+
+    if legacy in {
+        LOG_NEW,
+        LOG_PARSED,
+        LOG_INVALID,
+        LOG_DUPLICATED,
+        LOG_IGNORED,
+    } and not parse_value:
+        parse_value = legacy
+
+    if not normalized_value:
+        if legacy == LOG_CONVERTED:
+            normalized_value = LOG_NORMALIZATION_CONVERTED
+        elif parse_value == LOG_PARSE_PARSED:
+            normalized_value = LOG_NORMALIZATION_READY
+        else:
+            normalized_value = LOG_NORMALIZATION_PENDING
+
+    if not parse_value:
+        if normalized_value == LOG_NORMALIZATION_CONVERTED:
+            parse_value = LOG_PARSE_PARSED
+        else:
+            parse_value = LOG_PARSE_NEW
+
+    if normalized_value == LOG_NORMALIZATION_CONVERTED:
+        legacy = LOG_CONVERTED
+    elif parse_value in {
+        LOG_PARSE_INVALID,
+        LOG_PARSE_DUPLICATED,
+        LOG_PARSE_IGNORED,
+    }:
+        legacy = parse_value
+    elif parse_value == LOG_PARSE_PARSED:
+        legacy = LOG_PARSED
+    else:
+        legacy = LOG_NEW
+
+    return legacy, parse_value, normalized_value
+
+
 @dataclass(slots=True)
 class Machine:
     machine_id: str
@@ -54,6 +137,10 @@ class Machine:
 class Log:
     """
     Raw imported production record.
+
+    Compatibility note:
+    - `status` is kept for legacy flows
+    - `parse_status` and `normalized_status` are the canonical split
     """
 
     id: int | None = None
@@ -63,10 +150,28 @@ class Log:
     machine_code_raw: str | None = None
     captured_at: datetime | None = None
     raw_payload: str | None = None
+
     status: str = LOG_NEW
+    parse_status: str | None = None
+    normalized_status: str | None = None
+
     parse_error: str | None = None
     imported_at: datetime | None = None
     job_id: int | None = None
+
+    def __post_init__(self) -> None:
+        self.status, self.parse_status, self.normalized_status = resolve_log_status_parts(
+            self.status,
+            self.parse_status,
+            self.normalized_status,
+        )
+
+    def sync_status(self) -> None:
+        self.status, self.parse_status, self.normalized_status = resolve_log_status_parts(
+            self.status,
+            self.parse_status,
+            self.normalized_status,
+        )
 
     @property
     def is_actionable(self) -> bool:
@@ -74,7 +179,24 @@ class Log:
 
     @property
     def is_terminal(self) -> bool:
-        return self.status in {LOG_INVALID, LOG_DUPLICATED, LOG_IGNORED, LOG_CONVERTED}
+        return self.status in {
+            LOG_INVALID,
+            LOG_DUPLICATED,
+            LOG_IGNORED,
+            LOG_CONVERTED,
+        }
+
+    @property
+    def is_parsed(self) -> bool:
+        return self.parse_status == LOG_PARSE_PARSED
+
+    @property
+    def is_converted(self) -> bool:
+        return self.normalized_status == LOG_NORMALIZATION_CONVERTED
+
+    @property
+    def has_job(self) -> bool:
+        return self.job_id is not None
 
 
 @dataclass(slots=True)
@@ -85,41 +207,53 @@ class Job:
 
     id: int | None = None
     log_id: int | None = None
+
     job_id: str = ""
     machine: str = ""
     computer_name: str = ""
     document: str = ""
+
     start_time: datetime | None = None
     end_time: datetime | None = None
     duration_seconds: int = 0
+
     fabric: str | None = None
+
     planned_length_m: float = 0.0
     actual_printed_length_m: float = 0.0
     gap_before_m: float = 0.0
     consumed_length_m: float = 0.0
+
     driver: str | None = None
     source_path: str | None = None
+
     job_type: str = "PRODUCTION"
     is_rework: bool = False
     notes: str | None = None
+
     print_status: str = "OK"
     counts_as_valid_production: bool = True
     counts_for_fabric_summary: bool = True
     counts_for_roll_export: bool = True
     error_reason: str | None = None
+
     operator_code: str | None = None
     operator_name: str | None = None
     replacement_index: int | None = None
+
     suspicion_category: str | None = None
     suspicion_reason: str | None = None
     suspicion_ratio: float | None = None
     suspicion_missing_length_m: float | None = None
     suspicion_marked_at: datetime | None = None
+
     review_status: str | None = None
     review_note: str | None = None
     reviewed_by: str | None = None
     reviewed_at: datetime | None = None
+
     classification: str | None = None
+
     created_at: datetime | None = None
     updated_at: datetime | None = None
 
@@ -168,6 +302,26 @@ class Job:
         return self.actual_printed_length_m
 
     @property
+    def machine_code(self) -> str:
+        return self.machine
+
+    @property
+    def document_name(self) -> str:
+        return self.document
+
+    @property
+    def started_at(self) -> datetime | None:
+        return self.start_time
+
+    @property
+    def ended_at(self) -> datetime | None:
+        return self.end_time
+
+    @property
+    def classification_label(self) -> str:
+        return (self.classification or self.job_type or "PRODUCTION").strip().upper()
+
+    @property
     def is_suspicious(self) -> bool:
         return bool(self.suspicion_category or self.suspicion_reason)
 
@@ -177,7 +331,7 @@ class Job:
 
     @property
     def workflow_status(self) -> str:
-        if self.print_status == "IGNORED":
+        if (self.print_status or "").strip().upper() == "IGNORED":
             return JOB_IGNORED
         if self.roll_id is not None:
             return JOB_ASSIGNED_TO_ROLL
@@ -220,6 +374,10 @@ class Roll:
     @property
     def roll_code(self) -> str:
         return self.roll_name
+
+    @property
+    def opened_at(self) -> datetime | None:
+        return self.created_at
 
     @property
     def is_open(self) -> bool:
@@ -268,6 +426,10 @@ class RollItem:
         self.consumed_length_m = float(self.consumed_length_m or 0.0)
         self.gap_before_m = float(self.gap_before_m or 0.0)
 
+    @property
+    def sequence_no(self) -> int:
+        return self.sort_order
+
 
 @dataclass(slots=True)
 class LogSource:
@@ -277,6 +439,8 @@ class LogSource:
     recursive: bool = True
     enabled: bool = True
     machine_hint: str | None = None
+    last_scan_at: datetime | None = None
+    last_successful_mtime: float | None = None
 
 
 @dataclass(slots=True)
@@ -298,7 +462,17 @@ __all__ = [
     "REVIEWED_OK",
     "REVIEWED_PARTIAL",
     "REVIEWED_FAILED",
-    # Log statuses
+    # Explicit log parse statuses
+    "LOG_PARSE_NEW",
+    "LOG_PARSE_PARSED",
+    "LOG_PARSE_INVALID",
+    "LOG_PARSE_DUPLICATED",
+    "LOG_PARSE_IGNORED",
+    # Explicit log normalization statuses
+    "LOG_NORMALIZATION_PENDING",
+    "LOG_NORMALIZATION_READY",
+    "LOG_NORMALIZATION_CONVERTED",
+    # Legacy log aliases
     "LOG_NEW",
     "LOG_PARSED",
     "LOG_INVALID",
@@ -319,6 +493,8 @@ __all__ = [
     "JOB_ASSIGNED_TO_ROLL",
     "JOB_IGNORED",
     "JOB_CORRECTED",
+    # Helpers
+    "resolve_log_status_parts",
     # Models
     "Machine",
     "Log",

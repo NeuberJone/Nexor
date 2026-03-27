@@ -1,3 +1,11 @@
+# Arquivo: ui/common_widgets.py
+#
+# Resumo do que este arquivo implementa:
+# - centraliza estilos compartilhados da UI
+# - adiciona helpers de formatação mais defensivos
+# - mantém helpers reutilizáveis para Treeview, métricas e metadados
+# - evita duplicação de limpeza/configuração entre Home, Operação e Rolos
+
 from __future__ import annotations
 
 import tkinter as tk
@@ -23,6 +31,7 @@ def apply_common_styles() -> None:
     style.configure("MetricLabel.TLabel", font=("Segoe UI", 9))
     style.configure("MetricValue.TLabel", font=("Segoe UI", 11, "bold"))
     style.configure("PanelTitle.TLabel", font=("Segoe UI", 12, "bold"))
+    style.configure("Muted.TLabel", font=("Segoe UI", 9))
 
 
 def configure_tree_columns(
@@ -84,9 +93,37 @@ def meta_cell(
     return box
 
 
-def fmt_num(value: float | None) -> str:
-    return f"{float(value or 0.0):.2f}"
+def fmt_num(value: float | int | None) -> str:
+    return f"{_to_float(value):.2f}"
 
 
-def fmt_m(value: float | None) -> str:
-    return f"{float(value or 0.0):.2f} m"
+def fmt_m(value: float | int | None) -> str:
+    return f"{_to_float(value):.2f} m"
+
+
+def fmt_percent(value: float | None, *, scale_100: bool = True) -> str:
+    if value is None:
+        return "-"
+    number = _to_float(value)
+    if scale_100:
+        number *= 100.0
+    return f"{number:.1f}%"
+
+
+def fmt_dt(value: object, *, empty: str = "-") -> str:
+    if value is None:
+        return empty
+    if hasattr(value, "strftime"):
+        try:
+            return value.strftime("%d/%m/%Y %H:%M")
+        except Exception:
+            return str(value)
+    text = str(value).strip()
+    return text or empty
+
+
+def _to_float(value: float | int | None) -> float:
+    try:
+        return float(value or 0.0)
+    except (TypeError, ValueError):
+        return 0.0

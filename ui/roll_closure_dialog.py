@@ -32,6 +32,7 @@ class RollClosureDialog(tk.Toplevel):
         self.summary = summary
         self.result_summary: RollSummaryDTO | None = None
         self.export_result: dict | None = None
+        self.is_processing = False
 
         self.note_var = tk.StringVar(value=summary.note or "")
         self.export_after_close_var = tk.BooleanVar(value=False)
@@ -48,8 +49,12 @@ class RollClosureDialog(tk.Toplevel):
         self._build_ui()
         self._center(master)
 
-        self.bind("<Escape>", lambda event: self.destroy())
+        self.bind("<Escape>", lambda event: self._safe_close())
         self.bind("<Return>", self._on_confirm)
+
+    # ------------------------------------------------------------------
+    # Build
+    # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
         root = ttk.Frame(self, padding=16)
@@ -100,12 +105,16 @@ class RollClosureDialog(tk.Toplevel):
         box.columnconfigure(0, weight=1)
         box.columnconfigure(1, weight=1)
 
+        efficiency_text = self._format_efficiency(self.summary.efficiency_ratio)
+
         self._metric(box, 0, 0, "Planejado", fmt_m(self.summary.total_planned_m))
         self._metric(box, 0, 1, "Efetivo", fmt_m(self.summary.total_effective_m))
         self._metric(box, 1, 0, "Gap", fmt_m(self.summary.total_gap_m))
         self._metric(box, 1, 1, "Consumido", fmt_m(self.summary.total_consumed_m))
         self._metric(box, 2, 0, "Pendentes", str(self.summary.pending_review_count))
         self._metric(box, 2, 1, "Suspeitos", str(self.summary.suspicious_count))
+        self._metric(box, 3, 0, "Revisados OK", str(self.summary.reviewed_ok_count))
+        self._metric(box, 3, 1, "Eficiência", efficiency_text)
 
     def _build_warning_box(self, master: tk.Misc) -> None:
         needs_attention = self.summary.pending_review_count > 0 or self.summary.suspicious_count > 0
@@ -176,11 +185,19 @@ class RollClosureDialog(tk.Toplevel):
         actions = ttk.Frame(master)
         actions.grid(row=6, column=0, sticky="e")
 
-        ttk.Button(actions, text="Cancelar", command=self.destroy).pack(side="right")
-        ttk.Button(actions, text="Confirmar fechamento", command=self._confirm).pack(
-            side="right",
-            padx=(0, 8),
+        self.cancel_button = ttk.Button(actions, text="Cancelar", command=self._safe_close)
+        self.cancel_button.pack(side="right")
+
+        self.confirm_button = ttk.Button(
+            actions,
+            text="Confirmar fechamento",
+            command=self._confirm,
         )
+        self.confirm_button.pack(side="right", padx=(0, 8))
+
+    # ------------------------------------------------------------------
+    # Small UI helpers
+    # ------------------------------------------------------------------
 
     def _info_row(self, master: tk.Misc, row: int, label: str, value: str) -> None:
         ttk.Label(master, text=f"{label}:").grid(row=row, column=0, sticky="nw", padx=(0, 8), pady=2)
@@ -214,7 +231,33 @@ class RollClosureDialog(tk.Toplevel):
     def _on_confirm(self, event: tk.Event | None = None) -> None:
         self._confirm()
 
+    def _set_processing(self, is_processing: bool) -> None:
+        self.is_processing = is_processing
+        confirm_state = "disabled" if is_processing else "normal"
+        cancel_state = "disabled" if is_processing else "normal"
+        browse_state = "disabled"
+
+        if not is_processing and self.export_after_close_var.get():
+            browse_state = "normal"
+
+        self.confirm_button.configure(state=confirm_state)
+        self.cancel_button.configure(state=cancel_state)
+        self.export_dir_button.configure(state=browse_state)
+        self.export_dir_entry.configure(state=("normal" if browse_state == "normal" else "disabled"))
+
+    def _safe_close(self) -> None:
+        if self.is_processing:
+            return
+        self.destroy()
+
+    # ------------------------------------------------------------------
+    # Action
+    # ------------------------------------------------------------------
+
     def _confirm(self) -> None:
+        if self.is_processing:
+            return
+
         if self.summary.jobs_count <= 0:
             messagebox.showwarning(
                 "Fechamento do rolo",
@@ -243,37 +286,34 @@ class RollClosureDialog(tk.Toplevel):
             if not proceed:
                 return
 
+        self._set_processing(True)
         try:
             closed_summary = self.service.close_roll(
                 roll_id=self.summary.roll_id,
                 note=self.note_var.get().strip() or None,
             )
-        except Exception as exc:
-            messagebox.showerror(
-                "Fechamento do rolo",
-                f"Falha ao fechar o rolo.\n\nMotivo: {exc}",
-                parent=self,
-            )
-            return
+            self.result_summary = closed_summary
 
-        self.result_summary = closed_summary
-
-        if export_after:
-            try:
+            if export_after:
                 self.export_result = self.service.export_roll(
                     roll_id=closed_summary.roll_id,
                     output_dir=Path(export_dir),
                 )
-            except Exception as exc:
-                messagebox.showerror(
-                    "Fechamento do rolo",
-                    f"Rolo fechado, mas a exportação falhou.\n\nMotivo: {exc}",
-                    parent=self,
-                )
-                self.destroy()
-                return
+
+        except Exception as exc:
+            self._set_processing(False)
+            messagebox.showerror(
+                "Fechamento do rolo",
+                f"Falha ao concluir o fechamento.\n\nMotivo: {exc}",
+                parent=self,
+            )
+            return
 
         self.destroy()
+
+    # ------------------------------------------------------------------
+    # Generic helpers
+    # ------------------------------------------------------------------
 
     def _center(self, master: tk.Misc) -> None:
         self.update_idletasks()
@@ -293,3 +333,12 @@ class RollClosureDialog(tk.Toplevel):
         y = root_y + max((root_h - height) // 2, 0)
 
         self.geometry(f"+{x}+{y}")
+
+    @staticmethod
+    def _format_efficiency(value: float | None) -> str:
+        if value is None:
+            return "-"
+        try:
+            return f"{value * 100:.1f}%"
+        except Exception:
+            return "-"

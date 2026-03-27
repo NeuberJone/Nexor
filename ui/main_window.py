@@ -1,10 +1,13 @@
+# ui/main_window.py
 from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk
 
+from application.log_sources_service import LogSourcesService
 from application.operations_panel_service import OperationsPanelService
 from ui.home_panel import HomePanel
+from ui.log_sources_panel import LogSourcesPanel
 from ui.operations_panel import OperationsPanel
 from ui.rolls_panel import RollsPanel
 
@@ -27,10 +30,16 @@ class MainWindow(ttk.Frame):
     - páginas internas são content-only
     """
 
-    def __init__(self, master: tk.Misc, service: OperationsPanelService | None = None) -> None:
+    def __init__(
+        self,
+        master: tk.Misc,
+        service: OperationsPanelService | None = None,
+        log_sources_service: LogSourcesService | None = None,
+    ) -> None:
         super().__init__(master)
         self.master = master
         self.service = service or OperationsPanelService()
+        self.log_sources_service = log_sources_service
 
         self.current_page_key: str | None = None
         self.pages: dict[str, ttk.Frame] = {}
@@ -116,6 +125,14 @@ class MainWindow(ttk.Frame):
         )
         self.nav_buttons["rolls"].pack(fill="x", pady=2)
 
+        self.nav_buttons["log_sources"] = ttk.Button(
+            nav,
+            text="Fontes",
+            style="Nav.TButton",
+            command=lambda: self.show_page("log_sources"),
+        )
+        self.nav_buttons["log_sources"].pack(fill="x", pady=2)
+
         ttk.Button(nav, text="Planejamento", state="disabled", style="Nav.TButton").pack(fill="x", pady=2)
         ttk.Button(nav, text="Estoque", state="disabled", style="Nav.TButton").pack(fill="x", pady=2)
         ttk.Button(nav, text="Cadastros", state="disabled", style="Nav.TButton").pack(fill="x", pady=2)
@@ -171,6 +188,8 @@ class MainWindow(ttk.Frame):
             return OperationsPanel(self.content, service=self.service)
         if key == "rolls":
             return RollsPanel(self.content, service=self.service)
+        if key == "log_sources":
+            return LogSourcesPanel(self.content, service=self.log_sources_service)
         raise ValueError(f"Página desconhecida: {key}")
 
     def show_page(self, key: str) -> None:
@@ -206,6 +225,8 @@ class MainWindow(ttk.Frame):
             self.status_var.set("Página atual: Operação")
         elif self.current_page_key == "rolls":
             self.status_var.set("Página atual: Rolos")
+        elif self.current_page_key == "log_sources":
+            self.status_var.set("Página atual: Fontes de logs")
 
     def _apply_page_metadata(self, key: str) -> None:
         if key == "home":
@@ -217,6 +238,9 @@ class MainWindow(ttk.Frame):
         elif key == "rolls":
             self.page_title_var.set("Rolos")
             self.page_subtitle_var.set("Consulta operacional e inspeção de rolos.")
+        elif key == "log_sources":
+            self.page_title_var.set("Fontes de logs")
+            self.page_subtitle_var.set("Cadastro e controle das origens locais de importação.")
         else:
             self.page_title_var.set("Nexor")
             self.page_subtitle_var.set("")
@@ -231,9 +255,12 @@ class MainWindow(ttk.Frame):
             self.master.mainloop()
 
 
-def run_main_window(service: OperationsPanelService | None = None) -> None:
+def run_main_window(
+    service: OperationsPanelService | None = None,
+    log_sources_service: LogSourcesService | None = None,
+) -> None:
     root = tk.Tk()
-    MainWindow(root, service=service)
+    MainWindow(root, service=service, log_sources_service=log_sources_service)
     root.mainloop()
 
 

@@ -22,8 +22,17 @@ from core.models import (
     LOG_INVALID,
     LOG_NEW,
     LOG_PARSED,
+    LOG_NORMALIZATION_CONVERTED,
+    LOG_NORMALIZATION_PENDING,
+    LOG_NORMALIZATION_READY,
+    LOG_PARSE_DUPLICATED,
+    LOG_PARSE_IGNORED,
+    LOG_PARSE_INVALID,
+    LOG_PARSE_NEW,
+    LOG_PARSE_PARSED,
     Roll,
     RollItem,
+    resolve_log_status_parts,
 )
 
 
@@ -177,6 +186,8 @@ class ProductionRepository:
                     captured_at TEXT,
                     raw_payload TEXT,
                     status TEXT NOT NULL DEFAULT 'NEW',
+                    parse_status TEXT NOT NULL DEFAULT 'NEW',
+                    normalized_status TEXT NOT NULL DEFAULT 'PENDING',
                     parse_error TEXT,
                     imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     job_id INTEGER,
@@ -197,6 +208,8 @@ class ProductionRepository:
                     "captured_at": "TEXT",
                     "raw_payload": "TEXT",
                     "status": "TEXT",
+                    "parse_status": "TEXT",
+                    "normalized_status": "TEXT",
                     "parse_error": "TEXT",
                     "imported_at": "TEXT",
                     "job_id": "INTEGER",
@@ -205,11 +218,60 @@ class ProductionRepository:
                 },
             )
 
+            # Backfill canonical split for older databases.
+            conn.execute(
+                """
+                UPDATE logs
+                SET parse_status = CASE
+                    WHEN UPPER(COALESCE(status, '')) = 'PARSED' THEN 'PARSED'
+                    WHEN UPPER(COALESCE(status, '')) = 'INVALID' THEN 'INVALID'
+                    WHEN UPPER(COALESCE(status, '')) = 'DUPLICATED' THEN 'DUPLICATED'
+                    WHEN UPPER(COALESCE(status, '')) = 'IGNORED' THEN 'IGNORED'
+                    WHEN UPPER(COALESCE(status, '')) = 'CONVERTED' THEN 'PARSED'
+                    ELSE 'NEW'
+                END
+                WHERE parse_status IS NULL OR TRIM(parse_status) = ''
+                """
+            )
+
+            conn.execute(
+                """
+                UPDATE logs
+                SET normalized_status = CASE
+                    WHEN UPPER(COALESCE(status, '')) = 'CONVERTED' THEN 'CONVERTED'
+                    WHEN UPPER(COALESCE(parse_status, '')) = 'PARSED' THEN 'READY'
+                    ELSE 'PENDING'
+                END
+                WHERE normalized_status IS NULL OR TRIM(normalized_status) = ''
+                """
+            )
+
+            conn.execute(
+                """
+                UPDATE logs
+                SET status = CASE
+                    WHEN UPPER(COALESCE(normalized_status, '')) = 'CONVERTED' THEN 'CONVERTED'
+                    WHEN UPPER(COALESCE(parse_status, '')) = 'INVALID' THEN 'INVALID'
+                    WHEN UPPER(COALESCE(parse_status, '')) = 'DUPLICATED' THEN 'DUPLICATED'
+                    WHEN UPPER(COALESCE(parse_status, '')) = 'IGNORED' THEN 'IGNORED'
+                    WHEN UPPER(COALESCE(parse_status, '')) = 'PARSED' THEN 'PARSED'
+                    ELSE 'NEW'
+                END
+                WHERE status IS NULL OR TRIM(status) = ''
+                """
+            )
+
             conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS idx_logs_fingerprint ON logs (fingerprint)"
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_logs_status ON logs (status)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_logs_parse_status ON logs (parse_status)"
+            )
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_logs_normalized_status ON logs (normalized_status)"
             )
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_logs_captured_at ON logs (captured_at)"
@@ -434,6 +496,18 @@ class ProductionRepository:
     # ------------------------------------------------------------------
 
     def row_to_log(self, row: sqlite3.Row) -> Log:
+        status = row["status"] if "status" in row.keys() and row["status"] else LOG_NEW
+        parse_status = (
+            row["parse_status"]
+            if "parse_status" in row.keys() and row["parse_status"]
+            else None
+        )
+        normalized_status = (
+            row["normalized_status"]
+            if "normalized_status" in row.keys() and row["normalized_status"]
+            else None
+        )
+
         return Log(
             id=int(row["id"]) if row["id"] is not None else None,
             source_path=row["source_path"] if "source_path" in row.keys() else None,
@@ -442,21 +516,42 @@ class ProductionRepository:
             machine_code_raw=row["machine_code_raw"] if "machine_code_raw" in row.keys() else None,
             captured_at=_parse_datetime(row["captured_at"]) if "captured_at" in row.keys() else None,
             raw_payload=row["raw_payload"] if "raw_payload" in row.keys() else None,
-            status=row["status"] if "status" in row.keys() and row["status"] else LOG_NEW,
+            status=status,
+            parse_status=parse_status,
+            normalized_status=normalized_status,
             parse_error=row["parse_error"] if "parse_error" in row.keys() else None,
             imported_at=_parse_datetime(row["imported_at"]) if "imported_at" in row.keys() else None,
             job_id=int(row["job_id"]) if "job_id" in row.keys() and row["job_id"] is not None else None,
         )
 
-    def list_logs(self, status: str | None = None, limit: int | None = None) -> list[Log]:
+    def list_logs(
+        self,
+        status: str | None = None,
+        limit: int | None = None,
+        *,
+        parse_status: str | None = None,
+        normalized_status: str | None = None,
+    ) -> list[Log]:
         with self.connect() as conn:
             self.ensure_runtime_fields(conn)
             sql = "SELECT * FROM logs"
             params: list[object] = []
+            where_clauses: list[str] = []
 
             if status:
-                sql += " WHERE status = ?"
-                params.append(status)
+                where_clauses.append("UPPER(status) = ?")
+                params.append(status.strip().upper())
+
+            if parse_status:
+                where_clauses.append("UPPER(parse_status) = ?")
+                params.append(parse_status.strip().upper())
+
+            if normalized_status:
+                where_clauses.append("UPPER(normalized_status) = ?")
+                params.append(normalized_status.strip().upper())
+
+            if where_clauses:
+                sql += " WHERE " + " AND ".join(where_clauses)
 
             sql += " ORDER BY imported_at DESC, id DESC"
 
@@ -493,6 +588,12 @@ class ProductionRepository:
         with self.connect() as conn:
             self.ensure_runtime_fields(conn)
 
+            legacy_status, parse_status, normalized_status = resolve_log_status_parts(
+                getattr(log, "status", None),
+                getattr(log, "parse_status", None),
+                getattr(log, "normalized_status", None),
+            )
+
             payload = {
                 "source_path": log.source_path,
                 "source_name": log.source_name,
@@ -500,7 +601,9 @@ class ProductionRepository:
                 "machine_code_raw": log.machine_code_raw,
                 "captured_at": _dt_to_iso(log.captured_at),
                 "raw_payload": log.raw_payload,
-                "status": log.status or LOG_NEW,
+                "status": legacy_status,
+                "parse_status": parse_status,
+                "normalized_status": normalized_status,
                 "parse_error": log.parse_error,
                 "imported_at": _dt_to_iso(log.imported_at) or _now_iso(),
                 "job_id": log.job_id,
@@ -540,50 +643,100 @@ class ProductionRepository:
         self,
         conn: sqlite3.Connection,
         log_id: int,
-        status: str,
+        status: str | None = None,
+        *,
+        parse_status: str | None = None,
+        normalized_status: str | None = None,
         parse_error: str | None = None,
         job_id: int | None = None,
     ) -> None:
+        legacy_status, parse_value, normalized_value = resolve_log_status_parts(
+            status,
+            parse_status,
+            normalized_status,
+        )
+
         conn.execute(
             """
             UPDATE logs
             SET status = ?,
+                parse_status = ?,
+                normalized_status = ?,
                 parse_error = ?,
                 job_id = COALESCE(?, job_id),
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = ?
             """,
-            (status, parse_error, job_id, log_id),
+            (
+                legacy_status,
+                parse_value,
+                normalized_value,
+                parse_error,
+                job_id,
+                log_id,
+            ),
         )
 
     def mark_log_parsed(self, log_id: int) -> None:
         with self.connect() as conn:
             self.ensure_runtime_fields(conn)
-            self._update_log_status(conn, log_id, LOG_PARSED)
+            self._update_log_status(
+                conn,
+                log_id,
+                status=LOG_PARSED,
+                parse_status=LOG_PARSE_PARSED,
+                normalized_status=LOG_NORMALIZATION_READY,
+            )
             conn.commit()
 
     def mark_log_invalid(self, log_id: int, parse_error: str | None = None) -> None:
         with self.connect() as conn:
             self.ensure_runtime_fields(conn)
-            self._update_log_status(conn, log_id, LOG_INVALID, parse_error=parse_error)
+            self._update_log_status(
+                conn,
+                log_id,
+                status=LOG_INVALID,
+                parse_status=LOG_PARSE_INVALID,
+                normalized_status=LOG_NORMALIZATION_PENDING,
+                parse_error=parse_error,
+            )
             conn.commit()
 
     def mark_log_duplicated(self, log_id: int) -> None:
         with self.connect() as conn:
             self.ensure_runtime_fields(conn)
-            self._update_log_status(conn, log_id, LOG_DUPLICATED)
+            self._update_log_status(
+                conn,
+                log_id,
+                status=LOG_DUPLICATED,
+                parse_status=LOG_PARSE_DUPLICATED,
+                normalized_status=LOG_NORMALIZATION_PENDING,
+            )
             conn.commit()
 
     def mark_log_ignored(self, log_id: int) -> None:
         with self.connect() as conn:
             self.ensure_runtime_fields(conn)
-            self._update_log_status(conn, log_id, LOG_IGNORED)
+            self._update_log_status(
+                conn,
+                log_id,
+                status=LOG_IGNORED,
+                parse_status=LOG_PARSE_IGNORED,
+                normalized_status=LOG_NORMALIZATION_PENDING,
+            )
             conn.commit()
 
     def mark_log_converted(self, log_id: int, job_id: int) -> None:
         with self.connect() as conn:
             self.ensure_runtime_fields(conn)
-            self._update_log_status(conn, log_id, LOG_CONVERTED, job_id=job_id)
+            self._update_log_status(
+                conn,
+                log_id,
+                status=LOG_CONVERTED,
+                parse_status=LOG_PARSE_PARSED,
+                normalized_status=LOG_NORMALIZATION_CONVERTED,
+                job_id=job_id,
+            )
             conn.commit()
 
     # ------------------------------------------------------------------
@@ -899,7 +1052,9 @@ class ProductionRepository:
                 self._update_log_status(
                     conn,
                     int(log_id),
-                    LOG_CONVERTED,
+                    status=LOG_CONVERTED,
+                    parse_status=LOG_PARSE_PARSED,
+                    normalized_status=LOG_NORMALIZATION_CONVERTED,
                     job_id=job_row_id,
                 )
 

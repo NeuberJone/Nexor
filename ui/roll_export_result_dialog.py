@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import messagebox, ttk
 from pathlib import Path
+from tkinter import messagebox, ttk
 
 
 class RollExportResultDialog(tk.Toplevel):

@@ -36,6 +36,7 @@ class RollItemsPanel(ttk.LabelFrame):
         header_actions: list[tuple[str, object]] | None = None,
         tree_title: str = "Itens do rolo",
         title_wraplength: int = 700,
+        helper_text: str | None = None,
     ) -> None:
         super().__init__(master, text=panel_title, style="Section.TLabelframe", padding=8)
 
@@ -48,6 +49,7 @@ class RollItemsPanel(ttk.LabelFrame):
         self.header_actions = header_actions or []
         self.tree_title = tree_title
         self.title_wraplength = title_wraplength
+        self.helper_text = helper_text
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(2, weight=1)
@@ -66,12 +68,24 @@ class RollItemsPanel(ttk.LabelFrame):
         title_row.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         title_row.columnconfigure(0, weight=1)
 
+        title_box = ttk.Frame(title_row)
+        title_box.grid(row=0, column=0, sticky="w")
+
         ttk.Label(
-            title_row,
+            title_box,
             textvariable=self.title_var,
             style="PanelTitle.TLabel",
             wraplength=self.title_wraplength,
-        ).grid(row=0, column=0, sticky="w")
+        ).pack(anchor="w")
+
+        if self.helper_text:
+            ttk.Label(
+                title_box,
+                text=self.helper_text,
+                style="Muted.TLabel",
+                wraplength=self.title_wraplength,
+                justify="left",
+            ).pack(anchor="w", pady=(2, 0))
 
         if self.header_actions:
             buttons = ttk.Frame(title_row)
@@ -108,8 +122,10 @@ class RollItemsPanel(ttk.LabelFrame):
 
         sb_y = ttk.Scrollbar(items_box, orient="vertical", command=self.items_tree.yview)
         sb_y.grid(row=0, column=1, sticky="ns")
+
         sb_x = ttk.Scrollbar(items_box, orient="horizontal", command=self.items_tree.xview)
         sb_x.grid(row=1, column=0, sticky="ew")
+
         self.items_tree.configure(yscrollcommand=sb_y.set, xscrollcommand=sb_x.set)
 
         configure_tree_columns(
@@ -125,3 +141,20 @@ class RollItemsPanel(ttk.LabelFrame):
 
     def clear_items(self) -> None:
         clear_tree(self.items_tree)
+
+    def get_selected_row_id(self) -> int | None:
+        selection = self.items_tree.selection()
+        if not selection:
+            return None
+
+        values = self.items_tree.item(selection[0], "values")
+        if not values:
+            return None
+
+        try:
+            return int(values[0])
+        except (TypeError, ValueError):
+            return None
+
+    def item_count(self) -> int:
+        return len(self.items_tree.get_children())

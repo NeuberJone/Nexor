@@ -14,6 +14,7 @@ from application.operations_panel_service import (
 )
 from ui.common_widgets import (
     apply_common_styles,
+    clear_tree,
     fmt_m,
     fmt_num,
 )
@@ -59,6 +60,7 @@ class RollsPanel(ttk.Frame):
         self.roll_suspicious_var = tk.StringVar(value="0")
 
         self.current_summary: RollSummaryDTO | None = None
+        self.current_roll_id: int | None = None
 
         self.rolls_tree: ttk.Treeview
         self.roll_items_tree: ttk.Treeview
@@ -68,6 +70,10 @@ class RollsPanel(ttk.Frame):
         apply_common_styles()
         self._build_ui()
         self.refresh_all()
+
+    # ------------------------------------------------------------------
+    # Build
+    # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
         self.grid(row=0, column=0, sticky="nsew")
@@ -182,6 +188,10 @@ class RollsPanel(ttk.Frame):
         )
         self.summary_panel.grid(row=0, column=0, sticky="nsew")
 
+    # ------------------------------------------------------------------
+    # Refresh / filters
+    # ------------------------------------------------------------------
+
     def clear_filters(self) -> None:
         self.status_var.set("ALL")
         self.machine_var.set("ALL")
@@ -207,6 +217,8 @@ class RollsPanel(ttk.Frame):
             self.machine_var.set("ALL")
 
     def refresh_rolls(self) -> None:
+        previous_roll_id = self.current_roll_id
+
         filters = RollListFilters(
             status=self._none_if_all(self.status_var.get()),
             machine=self._none_if_all(self.machine_var.get()),
@@ -219,24 +231,28 @@ class RollsPanel(ttk.Frame):
         self.rolls_count_var.set(str(len(rows)))
 
         if not rows:
+            self.current_roll_id = None
             self.current_summary = None
             self._clear_roll_panel()
             return
 
-        first_item = self.rolls_tree.get_children()
-        if first_item:
-            self.rolls_tree.selection_set(first_item[0])
-            self.rolls_tree.focus(first_item[0])
-            self.load_selected_roll_detail()
+        target_roll_id = previous_roll_id if any(row.roll_id == previous_roll_id for row in rows) else rows[0].roll_id
+        self._select_roll_in_tree(target_roll_id)
+        self.load_selected_roll_detail()
 
     def load_selected_roll_detail(self) -> None:
         roll_id = self._get_selected_roll_id()
         if roll_id is None:
             return
 
-        summary = self.service.get_roll_summary(roll_id)
+        summary = self.service.get_roll_detail(roll_id)
+        self.current_roll_id = summary.roll_id
         self.current_summary = summary
         self._apply_summary(summary)
+
+    # ------------------------------------------------------------------
+    # Actions
+    # ------------------------------------------------------------------
 
     def export_selected_roll(self) -> None:
         if self.current_summary is None:
@@ -261,17 +277,27 @@ class RollsPanel(ttk.Frame):
             return
 
         s = self.current_summary
+        efficiency_text = (
+            f"{(s.efficiency_ratio * 100):.1f}%"
+            if s.efficiency_ratio is not None
+            else "-"
+        )
+
         text = (
             f"Rolo: {s.roll_name}\n"
             f"ID: {s.roll_id}\n"
             f"Status: {s.status}\n"
             f"Máquina: {s.machine}\n"
             f"Tecido: {s.fabric or '-'}\n"
+            f"Criado em: {self._fmt_dt(s.created_at)}\n"
+            f"Fechado em: {self._fmt_dt(s.closed_at)}\n"
+            f"Exportado em: {self._fmt_dt(s.exported_at)}\n"
             f"Jobs: {s.jobs_count}\n"
             f"Planejado: {fmt_m(s.total_planned_m)}\n"
             f"Efetivo: {fmt_m(s.total_effective_m)}\n"
             f"Gap: {fmt_m(s.total_gap_m)}\n"
             f"Consumido: {fmt_m(s.total_consumed_m)}\n"
+            f"Eficiência: {efficiency_text}\n"
             f"Pendentes: {s.pending_review_count}\n"
             f"Revisados OK: {s.reviewed_ok_count}\n"
             f"Suspeitos: {s.suspicious_count}\n"
@@ -279,9 +305,12 @@ class RollsPanel(ttk.Frame):
         )
         messagebox.showinfo("Detalhes do rolo", text, parent=self)
 
+    # ------------------------------------------------------------------
+    # Apply state
+    # ------------------------------------------------------------------
+
     def _populate_rolls_tree(self, rows: Iterable[OpenRollRow]) -> None:
-        for item in self.rolls_tree.get_children():
-            self.rolls_tree.delete(item)
+        clear_tree(self.rolls_tree)
 
         for row in rows:
             self.rolls_tree.insert(
@@ -348,6 +377,10 @@ class RollsPanel(ttk.Frame):
         self.roll_suspicious_var.set("0")
         self.roll_panel.clear_items()
 
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
     def _get_selected_roll_id(self) -> int | None:
         selection = self.rolls_tree.selection()
         if not selection:
@@ -360,12 +393,38 @@ class RollsPanel(ttk.Frame):
         except (TypeError, ValueError):
             return None
 
+    def _select_roll_in_tree(self, roll_id: int) -> None:
+        for item_id in self.rolls_tree.get_children():
+            values = self.rolls_tree.item(item_id, "values")
+            if not values:
+                continue
+            try:
+                value_roll_id = int(values[0])
+            except (TypeError, ValueError):
+                continue
+            if value_roll_id == roll_id:
+                self.rolls_tree.selection_set(item_id)
+                self.rolls_tree.focus(item_id)
+                self.rolls_tree.see(item_id)
+                return
+
     @staticmethod
     def _none_if_all(value: str | None) -> str | None:
         text = (value or "").strip()
         if not text or text.upper() == "ALL":
             return None
         return text
+
+    @staticmethod
+    def _fmt_dt(value: object) -> str:
+        if value is None:
+            return "-"
+        if hasattr(value, "strftime"):
+            try:
+                return value.strftime("%d/%m/%Y %H:%M")
+            except Exception:
+                return str(value)
+        return str(value)
 
 
 def run_rolls_panel(service: OperationsPanelService | None = None) -> None:

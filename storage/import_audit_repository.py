@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import sqlite3
 from datetime import datetime
+from pathlib import Path
 
 from storage.database import get_connection
 
@@ -11,15 +12,15 @@ def _now_iso() -> str:
 
 
 class ImportAuditRepository:
-    def __init__(self) -> None:
-        pass
+    def __init__(self, db_path: str | Path | None = None) -> None:
+        self.db_path = Path(db_path) if db_path is not None else None
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def connect(self) -> sqlite3.Connection:
-        conn = get_connection()
+        conn = get_connection(self.db_path)
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
 

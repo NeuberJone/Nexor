@@ -28,6 +28,7 @@ class RollSummaryPanel(ttk.LabelFrame):
         width: int = 300,
         metrics: list[tuple[str, tk.StringVar]] | None = None,
         actions: list[tuple[str, object]] | None = None,
+        helper_text: str | None = None,
     ) -> None:
         super().__init__(master, text=title, style="Section.TLabelframe", padding=8)
 
@@ -40,13 +41,33 @@ class RollSummaryPanel(ttk.LabelFrame):
 
         self.metrics = metrics or []
         self.actions = actions or []
+        self.helper_text = helper_text
 
+        self._build_header()
         self._build_metrics()
         self._build_actions()
 
+    def _build_header(self) -> None:
+        if not self.helper_text:
+            return
+
+        header = ttk.Frame(self)
+        header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        header.columnconfigure(0, weight=1)
+
+        ttk.Label(
+            header,
+            text=self.helper_text,
+            style="Muted.TLabel",
+            wraplength=260,
+            justify="left",
+        ).grid(row=0, column=0, sticky="w")
+
     def _build_metrics(self) -> None:
+        row_offset = 1 if self.helper_text else 0
+
         for index, (label, variable) in enumerate(self.metrics):
-            row = index // 2
+            row = row_offset + (index // 2)
             col = index % 2
             metric_cell(self, row=row, col=col, label=label, variable=variable)
 
@@ -54,7 +75,9 @@ class RollSummaryPanel(ttk.LabelFrame):
         if not self.actions:
             return
 
-        start_row = (len(self.metrics) + 1) // 2
+        row_offset = 1 if self.helper_text else 0
+        start_row = row_offset + ((len(self.metrics) + 1) // 2)
+
         actions_frame = ttk.Frame(self)
         actions_frame.grid(row=start_row, column=0, columnspan=2, sticky="ew", pady=(12, 0))
         actions_frame.columnconfigure(0, weight=1)

@@ -1,3 +1,4 @@
+# ui/rolls_panel.py
 from __future__ import annotations
 
 import tkinter as tk
@@ -12,30 +13,23 @@ from application.operations_panel_service import (
     RollListFilters,
     RollSummaryDTO,
 )
-from ui.common_widgets import (
-    apply_common_styles,
-    clear_tree,
-    fmt_m,
-    fmt_num,
-)
+from ui.common_widgets import apply_common_styles, clear_tree, fmt_m, fmt_num
 from ui.roll_export_result_dialog import RollExportResultDialog
-from ui.roll_items_panel import RollItemsPanel
-from ui.roll_summary_panel import RollSummaryPanel
-from ui.table_list_panel import TableListPanel
-from ui.workspace_layout import TwoRowWorkspace
-
-
-SUMMARY_PANEL_WIDTH = 300
 
 
 class RollsPanel(ttk.Frame):
     """
-    Painel de rolos em modo content-only, no mesmo layout-base da Operação.
+    Tela simplificada de Rolos para testes funcionais.
+
+    Estrutura:
+    - filtros básicos
+    - lista de rolos
+    - detalhe simples do rolo selecionado
+    - tabela de itens
     """
 
     def __init__(self, master: tk.Misc, service: OperationsPanelService | None = None) -> None:
         super().__init__(master)
-        self.master = master
         self.service = service or OperationsPanelService()
 
         self.status_var = tk.StringVar(value="ALL")
@@ -78,115 +72,161 @@ class RollsPanel(ttk.Frame):
     def _build_ui(self) -> None:
         self.grid(row=0, column=0, sticky="nsew")
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(1, weight=1)
+        self.rowconfigure(2, weight=1)
 
         self._build_filters()
-        self._build_body()
+        self._build_rolls_list()
+        self._build_detail_area()
 
     def _build_filters(self) -> None:
-        filters = ttk.LabelFrame(self, text="Filtros", style="Section.TLabelframe", padding=10)
+        filters = ttk.LabelFrame(self, text="Filtros", padding=8)
         filters.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         for col in range(6):
             filters.columnconfigure(col, weight=1 if col in {1, 3, 5} else 0)
 
         ttk.Label(filters, text="Status").grid(row=0, column=0, sticky="w", padx=(0, 6))
         self.status_combo = ttk.Combobox(filters, textvariable=self.status_var, state="readonly")
-        self.status_combo.grid(row=0, column=1, sticky="ew", padx=(0, 12))
+        self.status_combo.grid(row=0, column=1, sticky="ew", padx=(0, 10))
 
         ttk.Label(filters, text="Máquina").grid(row=0, column=2, sticky="w", padx=(0, 6))
         self.machine_combo = ttk.Combobox(filters, textvariable=self.machine_var, state="readonly")
-        self.machine_combo.grid(row=0, column=3, sticky="ew", padx=(0, 12))
+        self.machine_combo.grid(row=0, column=3, sticky="ew", padx=(0, 10))
 
         ttk.Label(filters, text="Busca").grid(row=0, column=4, sticky="w", padx=(0, 6))
         ttk.Entry(filters, textvariable=self.search_var).grid(row=0, column=5, sticky="ew")
 
         actions = ttk.Frame(filters)
-        actions.grid(row=1, column=0, columnspan=6, sticky="e", pady=(10, 0))
-        ttk.Button(actions, text="Limpar filtros", command=self.clear_filters).pack(side="right")
-        ttk.Button(actions, text="Atualizar", command=self.refresh_all).pack(side="right", padx=(0, 8))
-        ttk.Button(actions, text="Aplicar filtros", command=self.refresh_rolls).pack(side="right", padx=(0, 8))
+        actions.grid(row=1, column=0, columnspan=6, sticky="e", pady=(8, 0))
+        ttk.Button(actions, text="Aplicar filtros", command=self.refresh_rolls).pack(side="left")
+        ttk.Button(actions, text="Atualizar", command=self.refresh_all).pack(side="left", padx=(8, 0))
+        ttk.Button(actions, text="Limpar filtros", command=self.clear_filters).pack(side="left", padx=(8, 0))
 
-    def _build_body(self) -> None:
-        self.workspace = TwoRowWorkspace(
-            self,
-            right_width=SUMMARY_PANEL_WIDTH,
-            top_weight=3,
-            bottom_weight=2,
+    def _build_rolls_list(self) -> None:
+        area = ttk.LabelFrame(self, text="Lista de rolos", padding=8)
+        area.grid(row=1, column=0, sticky="nsew", pady=(0, 8))
+        area.columnconfigure(0, weight=1)
+        area.rowconfigure(1, weight=1)
+
+        top = ttk.Frame(area)
+        top.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        top.columnconfigure(1, weight=1)
+
+        ttk.Label(top, text="Total visível:").grid(row=0, column=0, sticky="w")
+        ttk.Label(top, textvariable=self.rolls_count_var, style="MetricValue.TLabel").grid(
+            row=0, column=1, sticky="w", padx=(6, 0)
         )
-        self.workspace.grid(row=1, column=0, sticky="nsew")
 
-        self._build_rolls_list_panel(self.workspace.left_top)
-        self._build_selected_roll_panel(self.workspace.left_bottom)
-        self._build_summary_panel(self.workspace.right_panel)
-
-    def _build_rolls_list_panel(self, master: tk.Misc) -> None:
-        self.rolls_panel = TableListPanel(
-            master,
-            panel_title="Lista de rolos",
-            count_label="Total visível:",
-            count_var=self.rolls_count_var,
-            tree_columns={
-                "roll_id": ("ID", 70),
-                "roll_name": ("Rolo", 220),
-                "machine": ("Máquina", 90),
-                "fabric": ("Tecido", 120),
-                "jobs": ("Jobs", 70),
-                "consumed": ("Consumido (m)", 120),
-                "status": ("Status", 100),
-            },
-            left_aligned_columns={"roll_name", "fabric"},
+        self.rolls_tree = ttk.Treeview(
+            area,
+            columns=("roll_id", "roll_name", "machine", "fabric", "jobs", "consumed", "status"),
+            show="headings",
+            selectmode="browse",
         )
-        self.rolls_panel.grid(row=0, column=0, sticky="nsew")
-        self.rolls_tree = self.rolls_panel.tree
+        self.rolls_tree.grid(row=1, column=0, sticky="nsew")
         self.rolls_tree.bind("<<TreeviewSelect>>", lambda event: self.load_selected_roll_detail())
         self.rolls_tree.bind("<Double-1>", lambda event: self.load_selected_roll_detail())
 
-    def _build_selected_roll_panel(self, master: tk.Misc) -> None:
-        self.roll_panel = RollItemsPanel(
-            master,
-            panel_title="Rolo selecionado",
-            title_var=self.roll_title_var,
-            meta_fields=[
-                ("Status", self.roll_status_var),
-                ("Máquina", self.roll_machine_var),
-                ("Tecido", self.roll_fabric_var),
-                ("Observação", self.roll_note_var),
-            ],
-            tree_columns={
-                "row_id": ("ID", 60),
-                "job_id": ("Job", 90),
-                "machine": ("Máquina", 80),
-                "fabric": ("Tecido", 110),
-                "review": ("Review", 110),
-                "document": ("Documento", 260),
-                "consumed": ("Cons. (m)", 90),
+        self._configure_tree_columns(
+            self.rolls_tree,
+            {
+                "roll_id": ("ID", 60, "center"),
+                "roll_name": ("Rolo", 260, "w"),
+                "machine": ("Máquina", 90, "center"),
+                "fabric": ("Tecido", 120, "w"),
+                "jobs": ("Jobs", 70, "center"),
+                "consumed": ("Consumido (m)", 120, "center"),
+                "status": ("Status", 100, "center"),
             },
-            left_aligned_columns={"fabric", "review", "document"},
         )
-        self.roll_panel.grid(row=0, column=0, sticky="nsew")
-        self.roll_items_tree = self.roll_panel.items_tree
 
-    def _build_summary_panel(self, master: tk.Misc) -> None:
-        self.summary_panel = RollSummaryPanel(
-            master,
-            width=SUMMARY_PANEL_WIDTH,
-            metrics=[
-                ("Jobs", self.roll_jobs_var),
-                ("Planejado", self.roll_planned_var),
-                ("Efetivo", self.roll_effective_var),
-                ("Gap", self.roll_gap_var),
-                ("Consumido", self.roll_consumed_var),
-                ("Pendentes", self.roll_pending_var),
-                ("Revisados OK", self.roll_ok_var),
-                ("Suspeitos", self.roll_suspicious_var),
-            ],
-            actions=[
-                ("Ver detalhe textual", self.show_detail_dialog),
-                ("Exportar novamente", self.export_selected_roll),
-                ("Atualizar seleção", self.load_selected_roll_detail),
-            ],
+        sb_y = ttk.Scrollbar(area, orient="vertical", command=self.rolls_tree.yview)
+        sb_y.grid(row=1, column=1, sticky="ns")
+        sb_x = ttk.Scrollbar(area, orient="horizontal", command=self.rolls_tree.xview)
+        sb_x.grid(row=2, column=0, sticky="ew")
+        self.rolls_tree.configure(yscrollcommand=sb_y.set, xscrollcommand=sb_x.set)
+
+    def _build_detail_area(self) -> None:
+        area = ttk.LabelFrame(self, text="Rolo selecionado", padding=8)
+        area.grid(row=2, column=0, sticky="nsew")
+        area.columnconfigure(0, weight=1)
+        area.rowconfigure(1, weight=1)
+
+        summary = ttk.Frame(area)
+        summary.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        for col in range(4):
+            summary.columnconfigure(col, weight=1)
+
+        ttk.Label(summary, textvariable=self.roll_title_var, style="PanelTitle.TLabel").grid(
+            row=0, column=0, columnspan=4, sticky="w", pady=(0, 8)
         )
-        self.summary_panel.grid(row=0, column=0, sticky="nsew")
+
+        self._meta_cell(summary, 1, 0, "Status", self.roll_status_var)
+        self._meta_cell(summary, 1, 1, "Máquina", self.roll_machine_var)
+        self._meta_cell(summary, 1, 2, "Tecido", self.roll_fabric_var)
+        self._meta_cell(summary, 1, 3, "Observação", self.roll_note_var)
+
+        self._meta_cell(summary, 2, 0, "Jobs", self.roll_jobs_var)
+        self._meta_cell(summary, 2, 1, "Planejado", self.roll_planned_var)
+        self._meta_cell(summary, 2, 2, "Efetivo", self.roll_effective_var)
+        self._meta_cell(summary, 2, 3, "Gap", self.roll_gap_var)
+
+        self._meta_cell(summary, 3, 0, "Consumido", self.roll_consumed_var)
+        self._meta_cell(summary, 3, 1, "Pendentes", self.roll_pending_var)
+        self._meta_cell(summary, 3, 2, "Revisados OK", self.roll_ok_var)
+        self._meta_cell(summary, 3, 3, "Suspeitos", self.roll_suspicious_var)
+
+        actions = ttk.Frame(summary)
+        actions.grid(row=4, column=0, columnspan=4, sticky="w", pady=(10, 0))
+        ttk.Button(actions, text="Ver detalhe textual", command=self.show_detail_dialog).pack(side="left")
+        ttk.Button(actions, text="Exportar novamente", command=self.export_selected_roll).pack(side="left", padx=(8, 0))
+        ttk.Button(actions, text="Atualizar seleção", command=self.load_selected_roll_detail).pack(side="left", padx=(8, 0))
+
+        items_box = ttk.LabelFrame(area, text="Itens do rolo", padding=8)
+        items_box.grid(row=1, column=0, sticky="nsew")
+        items_box.columnconfigure(0, weight=1)
+        items_box.rowconfigure(0, weight=1)
+
+        self.roll_items_tree = ttk.Treeview(
+            items_box,
+            columns=("row_id", "job_id", "machine", "fabric", "review", "document", "consumed"),
+            show="headings",
+            selectmode="browse",
+        )
+        self.roll_items_tree.grid(row=0, column=0, sticky="nsew")
+
+        self._configure_tree_columns(
+            self.roll_items_tree,
+            {
+                "row_id": ("ID", 60, "center"),
+                "job_id": ("Job", 90, "center"),
+                "machine": ("Máquina", 80, "center"),
+                "fabric": ("Tecido", 100, "w"),
+                "review": ("Review", 120, "w"),
+                "document": ("Documento", 560, "w"),
+                "consumed": ("Cons. (m)", 90, "center"),
+            },
+        )
+
+        sb_y = ttk.Scrollbar(items_box, orient="vertical", command=self.roll_items_tree.yview)
+        sb_y.grid(row=0, column=1, sticky="ns")
+        sb_x = ttk.Scrollbar(items_box, orient="horizontal", command=self.roll_items_tree.xview)
+        sb_x.grid(row=1, column=0, sticky="ew")
+        self.roll_items_tree.configure(yscrollcommand=sb_y.set, xscrollcommand=sb_x.set)
+
+    def _meta_cell(self, master: tk.Misc, row: int, col: int, label: str, variable: tk.StringVar) -> None:
+        box = ttk.Frame(master, padding=(0, 2))
+        box.grid(row=row, column=col, sticky="w")
+        ttk.Label(box, text=f"{label}:").pack(anchor="w")
+        ttk.Label(box, textvariable=variable).pack(anchor="w")
+
+    def _configure_tree_columns(
+        self,
+        tree: ttk.Treeview,
+        columns: dict[str, tuple[str, int, str]],
+    ) -> None:
+        for column_id, (title, width, anchor) in columns.items():
+            tree.heading(column_id, text=title)
+            tree.column(column_id, width=width, minwidth=width, anchor=anchor, stretch=True)
 
     # ------------------------------------------------------------------
     # Refresh / filters
@@ -277,11 +317,7 @@ class RollsPanel(ttk.Frame):
             return
 
         s = self.current_summary
-        efficiency_text = (
-            f"{(s.efficiency_ratio * 100):.1f}%"
-            if s.efficiency_ratio is not None
-            else "-"
-        )
+        efficiency_text = f"{(s.efficiency_ratio * 100):.1f}%" if s.efficiency_ratio is not None else "-"
 
         text = (
             f"Rolo: {s.roll_name}\n"
@@ -311,7 +347,6 @@ class RollsPanel(ttk.Frame):
 
     def _populate_rolls_tree(self, rows: Iterable[OpenRollRow]) -> None:
         clear_tree(self.rolls_tree)
-
         for row in rows:
             self.rolls_tree.insert(
                 "",
@@ -346,10 +381,12 @@ class RollsPanel(ttk.Frame):
         self._populate_roll_items_tree(summary.items)
 
     def _populate_roll_items_tree(self, items: Iterable[RollItemRow]) -> None:
-        rows = []
+        clear_tree(self.roll_items_tree)
         for item in items:
-            rows.append(
-                (
+            self.roll_items_tree.insert(
+                "",
+                "end",
+                values=(
                     item.row_id or "-",
                     item.job_id,
                     item.machine,
@@ -357,9 +394,8 @@ class RollsPanel(ttk.Frame):
                     item.review_status or "-",
                     item.document,
                     fmt_num(item.consumed_length_m),
-                )
+                ),
             )
-        self.roll_panel.set_items(rows)
 
     def _clear_roll_panel(self) -> None:
         self.roll_title_var.set("Nenhum rolo selecionado")
@@ -375,7 +411,7 @@ class RollsPanel(ttk.Frame):
         self.roll_pending_var.set("0")
         self.roll_ok_var.set("0")
         self.roll_suspicious_var.set("0")
-        self.roll_panel.clear_items()
+        clear_tree(self.roll_items_tree)
 
     # ------------------------------------------------------------------
     # Helpers
@@ -385,9 +421,11 @@ class RollsPanel(ttk.Frame):
         selection = self.rolls_tree.selection()
         if not selection:
             return None
+
         values = self.rolls_tree.item(selection[0], "values")
         if not values:
             return None
+
         try:
             return int(values[0])
         except (TypeError, ValueError):

@@ -1,3 +1,4 @@
+# ui/operations_panel.py
 from __future__ import annotations
 
 import tkinter as tk
@@ -15,21 +16,9 @@ from application.operations_panel_service import (
     RollItemRow,
     RollSummaryDTO,
 )
-from ui.common_widgets import (
-    apply_common_styles,
-    clear_tree,
-    fmt_m,
-    fmt_num,
-)
+from ui.common_widgets import apply_common_styles, clear_tree, fmt_m, fmt_num
 from ui.roll_closure_dialog import RollClosureDialog
 from ui.roll_export_result_dialog import RollExportResultDialog
-from ui.roll_items_panel import RollItemsPanel
-from ui.roll_summary_panel import RollSummaryPanel
-from ui.table_list_panel import TableListPanel
-from ui.workspace_layout import TwoRowWorkspace
-
-
-SUMMARY_PANEL_WIDTH = 300
 
 
 class CreateRollDialog(tk.Toplevel):
@@ -117,48 +106,54 @@ class CreateRollDialog(tk.Toplevel):
 
 
 class OperationsPanel(ttk.Frame):
+    """
+    Tela simplificada de Operação para testes funcionais.
+
+    Estrutura:
+    - barra superior com ações principais
+    - resumo operacional curto
+    - abas separadas:
+        1) Jobs disponíveis
+        2) Rolo ativo
+        3) Fila de logs
+    """
+
     def __init__(self, master: tk.Misc, service: OperationsPanelService | None = None) -> None:
         super().__init__(master)
-        self.master = master
         self.service = service or OperationsPanelService()
 
         self.active_roll_id: int | None = None
         self.current_summary: RollSummaryDTO | None = None
 
-        # Jobs filters
+        # snapshot
+        self.snapshot_jobs_var = tk.StringVar(value="0")
+        self.snapshot_rolls_var = tk.StringVar(value="0")
+        self.snapshot_pending_logs_var = tk.StringVar(value="0")
+        self.snapshot_alerts_var = tk.StringVar(value="0")
+
+        # jobs filters
         self.machine_var = tk.StringVar(value="ALL")
         self.fabric_var = tk.StringVar(value="ALL")
-        self.review_status_var = tk.StringVar(value="REVIEWED_OK")
+        self.review_status_var = tk.StringVar(value="ALL")
         self.exclude_suspicious_var = tk.BooleanVar(value=False)
         self.search_var = tk.StringVar(value="")
 
-        # Logs filters
+        # logs filters
         self.log_status_var = tk.StringVar(value="ALL")
         self.log_parse_status_var = tk.StringVar(value="ALL")
         self.log_normalized_status_var = tk.StringVar(value="ALL")
         self.log_search_var = tk.StringVar(value="")
 
-        # Header metrics
-        self.snapshot_available_jobs_var = tk.StringVar(value="0")
-        self.snapshot_suspicious_jobs_var = tk.StringVar(value="0")
-        self.snapshot_open_rolls_var = tk.StringVar(value="0")
-        self.snapshot_pending_logs_var = tk.StringVar(value="0")
-        self.snapshot_ready_logs_var = tk.StringVar(value="0")
-        self.snapshot_converted_logs_var = tk.StringVar(value="0")
-        self.snapshot_invalid_logs_var = tk.StringVar(value="0")
-        self.snapshot_duplicated_logs_var = tk.StringVar(value="0")
-
-        # Counts
+        # counts
         self.jobs_count_var = tk.StringVar(value="0")
         self.logs_count_var = tk.StringVar(value="0")
 
-        # Active roll summary vars
+        # active roll vars
         self.roll_title_var = tk.StringVar(value="Nenhum rolo ativo")
         self.roll_machine_var = tk.StringVar(value="-")
         self.roll_fabric_var = tk.StringVar(value="-")
         self.roll_status_var = tk.StringVar(value="-")
         self.roll_note_var = tk.StringVar(value="-")
-
         self.roll_jobs_var = tk.StringVar(value="0")
         self.roll_planned_var = tk.StringVar(value="0.00 m")
         self.roll_effective_var = tk.StringVar(value="0.00 m")
@@ -169,8 +164,8 @@ class OperationsPanel(ttk.Frame):
         self.roll_suspicious_var = tk.StringVar(value="0")
 
         self.jobs_tree: ttk.Treeview
-        self.logs_tree: ttk.Treeview
         self.roll_items_tree: ttk.Treeview
+        self.logs_tree: ttk.Treeview
 
         self.machine_combo: ttk.Combobox
         self.fabric_combo: ttk.Combobox
@@ -192,257 +187,343 @@ class OperationsPanel(ttk.Frame):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(2, weight=1)
 
-        self._build_filters()
+        self._build_action_bar()
         self._build_snapshot_bar()
-        self._build_body()
+        self._build_tabs()
 
-    def _build_filters(self) -> None:
-        bar = ttk.LabelFrame(self, text="Filtros de jobs", style="Section.TLabelframe", padding=10)
+    def _build_action_bar(self) -> None:
+        bar = ttk.LabelFrame(self, text="Ações principais", padding=10)
         bar.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        for col in range(9):
-            bar.columnconfigure(col, weight=1 if col in {1, 3, 5, 7} else 0)
+        bar.columnconfigure(0, weight=1)
 
-        ttk.Label(bar, text="Máquina").grid(row=0, column=0, sticky="w", padx=(0, 6))
-        self.machine_combo = ttk.Combobox(bar, textvariable=self.machine_var, state="readonly")
-        self.machine_combo.grid(row=0, column=1, sticky="ew", padx=(0, 12))
+        left = ttk.Frame(bar)
+        left.grid(row=0, column=0, sticky="w")
 
-        ttk.Label(bar, text="Tecido").grid(row=0, column=2, sticky="w", padx=(0, 6))
-        self.fabric_combo = ttk.Combobox(bar, textvariable=self.fabric_var, state="readonly")
-        self.fabric_combo.grid(row=0, column=3, sticky="ew", padx=(0, 12))
+        ttk.Button(left, text="Atualizar tudo", command=self.refresh_all).pack(side="left")
+        ttk.Button(left, text="Novo rolo", command=self.create_roll).pack(side="left", padx=(8, 0))
+        ttk.Button(left, text="Fechar rolo", command=self.close_active_roll).pack(side="left", padx=(8, 0))
+        ttk.Button(left, text="Exportar rolo", command=self.export_active_roll).pack(side="left", padx=(8, 0))
 
-        ttk.Label(bar, text="Review").grid(row=0, column=4, sticky="w", padx=(0, 6))
-        self.review_combo = ttk.Combobox(bar, textvariable=self.review_status_var, state="readonly")
-        self.review_combo.grid(row=0, column=5, sticky="ew", padx=(0, 12))
-
-        ttk.Label(bar, text="Busca").grid(row=0, column=6, sticky="w", padx=(0, 6))
-        ttk.Entry(bar, textvariable=self.search_var).grid(row=0, column=7, sticky="ew", padx=(0, 12))
-
-        ttk.Checkbutton(
+        ttk.Label(
             bar,
-            text="Excluir suspeitos",
-            variable=self.exclude_suspicious_var,
-        ).grid(row=0, column=8, sticky="w")
-
-        actions = ttk.Frame(bar)
-        actions.grid(row=1, column=0, columnspan=9, sticky="e", pady=(10, 0))
-        ttk.Button(actions, text="Limpar filtros", command=self.clear_filters).pack(side="right")
-        ttk.Button(actions, text="Atualizar tudo", command=self.refresh_all).pack(side="right", padx=(0, 8))
-        ttk.Button(actions, text="Aplicar filtros", command=self.refresh_jobs).pack(side="right", padx=(0, 8))
+            text="Tela reduzida para teste funcional do fluxo.",
+        ).grid(row=1, column=0, sticky="w", pady=(8, 0))
 
     def _build_snapshot_bar(self) -> None:
-        box = ttk.LabelFrame(self, text="Visão geral operacional", style="Section.TLabelframe", padding=10)
+        box = ttk.LabelFrame(self, text="Resumo rápido", padding=10)
         box.grid(row=1, column=0, sticky="ew", pady=(0, 8))
 
         for col in range(4):
             box.columnconfigure(col, weight=1)
 
-        metrics = [
-            ("Jobs disponíveis", self.snapshot_available_jobs_var),
-            ("Jobs suspeitos", self.snapshot_suspicious_jobs_var),
-            ("Rolos abertos", self.snapshot_open_rolls_var),
-            ("Logs pendentes", self.snapshot_pending_logs_var),
-            ("Logs prontos", self.snapshot_ready_logs_var),
-            ("Logs convertidos", self.snapshot_converted_logs_var),
-            ("Logs inválidos", self.snapshot_invalid_logs_var),
-            ("Logs duplicados", self.snapshot_duplicated_logs_var),
-        ]
+        self._snapshot_cell(box, 0, "Jobs disponíveis", self.snapshot_jobs_var)
+        self._snapshot_cell(box, 1, "Rolos abertos", self.snapshot_rolls_var)
+        self._snapshot_cell(box, 2, "Logs pendentes", self.snapshot_pending_logs_var)
+        self._snapshot_cell(box, 3, "Alertas", self.snapshot_alerts_var)
 
-        for index, (label, value_var) in enumerate(metrics):
-            row = index // 4
-            col = index % 4
-            card = ttk.Frame(box, padding=(8, 6))
-            card.grid(row=row, column=col, sticky="nsew", padx=4, pady=4)
-            ttk.Label(card, text=label).pack(anchor="w")
-            ttk.Label(card, textvariable=value_var, style="MetricValue.TLabel").pack(anchor="w", pady=(2, 0))
+    def _snapshot_cell(self, master: tk.Misc, column: int, label: str, var: tk.StringVar) -> None:
+        cell = ttk.Frame(master, padding=(6, 2))
+        cell.grid(row=0, column=column, sticky="w")
+        ttk.Label(cell, text=label).pack(anchor="w")
+        ttk.Label(cell, textvariable=var, style="MetricValue.TLabel").pack(anchor="w")
 
-    def _build_body(self) -> None:
-        self.workspace = TwoRowWorkspace(
-            self,
-            right_width=SUMMARY_PANEL_WIDTH,
-            top_weight=3,
-            bottom_weight=2,
-        )
-        self.workspace.grid(row=2, column=0, sticky="nsew")
+    def _build_tabs(self) -> None:
+        notebook = ttk.Notebook(self)
+        notebook.grid(row=2, column=0, sticky="nsew")
 
-        self._build_top_left_tabs(self.workspace.left_top)
-        self._build_roll_panel(self.workspace.left_bottom)
-        self._build_summary_panel(self.workspace.right_panel)
-
-    def _build_top_left_tabs(self, master: tk.Misc) -> None:
-        master.columnconfigure(0, weight=1)
-        master.rowconfigure(0, weight=1)
-
-        notebook = ttk.Notebook(master)
-        notebook.grid(row=0, column=0, sticky="nsew")
-
-        jobs_tab = ttk.Frame(notebook)
+        jobs_tab = ttk.Frame(notebook, padding=8)
         jobs_tab.columnconfigure(0, weight=1)
-        jobs_tab.rowconfigure(0, weight=1)
+        jobs_tab.rowconfigure(1, weight=1)
 
-        logs_tab = ttk.Frame(notebook)
+        roll_tab = ttk.Frame(notebook, padding=8)
+        roll_tab.columnconfigure(0, weight=1)
+        roll_tab.rowconfigure(1, weight=1)
+
+        logs_tab = ttk.Frame(notebook, padding=8)
         logs_tab.columnconfigure(0, weight=1)
         logs_tab.rowconfigure(1, weight=1)
 
         notebook.add(jobs_tab, text="Jobs disponíveis")
+        notebook.add(roll_tab, text="Rolo ativo")
         notebook.add(logs_tab, text="Fila de logs")
 
-        self._build_jobs_panel(jobs_tab)
-        self._build_logs_panel(logs_tab)
+        self._build_jobs_tab(jobs_tab)
+        self._build_roll_tab(roll_tab)
+        self._build_logs_tab(logs_tab)
 
-    def _build_jobs_panel(self, master: tk.Misc) -> None:
-        self.jobs_panel = TableListPanel(
-            master,
-            panel_title="Jobs disponíveis",
-            count_label="Itens visíveis:",
-            count_var=self.jobs_count_var,
-            tree_columns={
-                "row_id": ("ID", 70),
-                "job_id": ("Job", 90),
-                "machine": ("Máquina", 90),
-                "fabric": ("Tecido", 120),
-                "review": ("Review", 120),
-                "document": ("Documento", 380),
-                "effective": ("Efetivo (m)", 100),
-                "gap": ("Gap (m)", 90),
-                "consumed": ("Consumido (m)", 115),
-                "sus": ("Suspeito", 90),
-            },
-            left_aligned_columns={"fabric", "review", "document"},
-            footer_actions=[
-                ("Adicionar ao rolo ativo", self.add_selected_job_to_active_roll),
-                ("Atualizar jobs", self.refresh_jobs),
-            ],
+    def _build_jobs_tab(self, master: tk.Misc) -> None:
+        filters = ttk.LabelFrame(master, text="Filtros", padding=8)
+        filters.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        for col in range(8):
+            filters.columnconfigure(col, weight=1 if col in {1, 3, 5} else 0)
+
+        ttk.Label(filters, text="Máquina").grid(row=0, column=0, sticky="w", padx=(0, 6))
+        self.machine_combo = ttk.Combobox(filters, textvariable=self.machine_var, state="readonly")
+        self.machine_combo.grid(row=0, column=1, sticky="ew", padx=(0, 10))
+
+        ttk.Label(filters, text="Tecido").grid(row=0, column=2, sticky="w", padx=(0, 6))
+        self.fabric_combo = ttk.Combobox(filters, textvariable=self.fabric_var, state="readonly")
+        self.fabric_combo.grid(row=0, column=3, sticky="ew", padx=(0, 10))
+
+        ttk.Label(filters, text="Review").grid(row=0, column=4, sticky="w", padx=(0, 6))
+        self.review_combo = ttk.Combobox(filters, textvariable=self.review_status_var, state="readonly")
+        self.review_combo.grid(row=0, column=5, sticky="ew", padx=(0, 10))
+
+        ttk.Checkbutton(
+            filters,
+            text="Excluir suspeitos",
+            variable=self.exclude_suspicious_var,
+        ).grid(row=0, column=6, sticky="w")
+
+        ttk.Label(filters, text="Busca").grid(row=1, column=0, sticky="w", padx=(0, 6), pady=(8, 0))
+        ttk.Entry(filters, textvariable=self.search_var).grid(
+            row=1,
+            column=1,
+            columnspan=5,
+            sticky="ew",
+            padx=(0, 10),
+            pady=(8, 0),
         )
-        self.jobs_panel.grid(row=0, column=0, sticky="nsew")
-        self.jobs_tree = self.jobs_panel.tree
+
+        actions = ttk.Frame(filters)
+        actions.grid(row=1, column=6, columnspan=2, sticky="e", pady=(8, 0))
+        ttk.Button(actions, text="Aplicar", command=self.refresh_jobs).pack(side="left")
+        ttk.Button(actions, text="Limpar", command=self.clear_filters).pack(side="left", padx=(8, 0))
+
+        area = ttk.LabelFrame(master, text="Jobs disponíveis", padding=8)
+        area.grid(row=1, column=0, sticky="nsew")
+        area.columnconfigure(0, weight=1)
+        area.rowconfigure(1, weight=1)
+
+        top = ttk.Frame(area)
+        top.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        top.columnconfigure(1, weight=1)
+        ttk.Label(top, text="Itens visíveis:").grid(row=0, column=0, sticky="w")
+        ttk.Label(top, textvariable=self.jobs_count_var, style="MetricValue.TLabel").grid(row=0, column=1, sticky="w", padx=(6, 0))
+
+        self.jobs_tree = ttk.Treeview(
+            area,
+            columns=(
+                "row_id",
+                "job_id",
+                "machine",
+                "fabric",
+                "review",
+                "document",
+                "effective",
+                "gap",
+                "consumed",
+                "sus",
+            ),
+            show="headings",
+            selectmode="browse",
+        )
+        self.jobs_tree.grid(row=1, column=0, sticky="nsew")
         self.jobs_tree.bind("<Double-1>", lambda event: self.add_selected_job_to_active_roll())
 
-    def _build_logs_panel(self, master: tk.Misc) -> None:
-        filters = ttk.Frame(master)
+        self._configure_tree_columns(
+            self.jobs_tree,
+            {
+                "row_id": ("ID", 60, "center"),
+                "job_id": ("Job", 90, "center"),
+                "machine": ("Máquina", 80, "center"),
+                "fabric": ("Tecido", 100, "w"),
+                "review": ("Review", 120, "w"),
+                "document": ("Documento", 420, "w"),
+                "effective": ("Efetivo (m)", 90, "center"),
+                "gap": ("Gap (m)", 80, "center"),
+                "consumed": ("Consumido (m)", 100, "center"),
+                "sus": ("Suspeito", 80, "center"),
+            },
+        )
+
+        sb_y = ttk.Scrollbar(area, orient="vertical", command=self.jobs_tree.yview)
+        sb_y.grid(row=1, column=1, sticky="ns")
+        sb_x = ttk.Scrollbar(area, orient="horizontal", command=self.jobs_tree.xview)
+        sb_x.grid(row=2, column=0, sticky="ew")
+        self.jobs_tree.configure(yscrollcommand=sb_y.set, xscrollcommand=sb_x.set)
+
+        footer = ttk.Frame(area)
+        footer.grid(row=3, column=0, sticky="w", pady=(8, 0))
+        ttk.Button(footer, text="Adicionar ao rolo ativo", command=self.add_selected_job_to_active_roll).pack(side="left")
+        ttk.Button(footer, text="Atualizar jobs", command=self.refresh_jobs).pack(side="left", padx=(8, 0))
+
+    def _build_roll_tab(self, master: tk.Misc) -> None:
+        header = ttk.LabelFrame(master, text="Rolo ativo", padding=8)
+        header.grid(row=0, column=0, sticky="ew", pady=(0, 8))
+        for col in range(4):
+            header.columnconfigure(col, weight=1)
+
+        ttk.Label(header, textvariable=self.roll_title_var, style="PanelTitle.TLabel").grid(
+            row=0, column=0, columnspan=4, sticky="w", pady=(0, 8)
+        )
+
+        self._meta_cell(header, 1, 0, "Máquina", self.roll_machine_var)
+        self._meta_cell(header, 1, 1, "Tecido", self.roll_fabric_var)
+        self._meta_cell(header, 1, 2, "Status", self.roll_status_var)
+        self._meta_cell(header, 1, 3, "Observação", self.roll_note_var)
+
+        self._meta_cell(header, 2, 0, "Jobs", self.roll_jobs_var)
+        self._meta_cell(header, 2, 1, "Planejado", self.roll_planned_var)
+        self._meta_cell(header, 2, 2, "Efetivo", self.roll_effective_var)
+        self._meta_cell(header, 2, 3, "Consumido", self.roll_consumed_var)
+
+        self._meta_cell(header, 3, 0, "Gap", self.roll_gap_var)
+        self._meta_cell(header, 3, 1, "Pendentes", self.roll_pending_var)
+        self._meta_cell(header, 3, 2, "Revisados OK", self.roll_ok_var)
+        self._meta_cell(header, 3, 3, "Suspeitos", self.roll_suspicious_var)
+
+        actions = ttk.Frame(header)
+        actions.grid(row=4, column=0, columnspan=4, sticky="w", pady=(10, 0))
+        ttk.Button(actions, text="Novo rolo", command=self.create_roll).pack(side="left")
+        ttk.Button(actions, text="Fechar rolo", command=self.close_active_roll).pack(side="left", padx=(8, 0))
+        ttk.Button(actions, text="Exportar rolo", command=self.export_active_roll).pack(side="left", padx=(8, 0))
+        ttk.Button(actions, text="Atualizar resumo", command=self.refresh_active_roll_summary).pack(side="left", padx=(8, 0))
+
+        area = ttk.LabelFrame(master, text="Itens do rolo", padding=8)
+        area.grid(row=1, column=0, sticky="nsew")
+        area.columnconfigure(0, weight=1)
+        area.rowconfigure(0, weight=1)
+
+        self.roll_items_tree = ttk.Treeview(
+            area,
+            columns=("row_id", "job_id", "machine", "fabric", "review", "document", "consumed"),
+            show="headings",
+            selectmode="browse",
+        )
+        self.roll_items_tree.grid(row=0, column=0, sticky="nsew")
+
+        self._configure_tree_columns(
+            self.roll_items_tree,
+            {
+                "row_id": ("ID", 60, "center"),
+                "job_id": ("Job", 90, "center"),
+                "machine": ("Máquina", 80, "center"),
+                "fabric": ("Tecido", 100, "w"),
+                "review": ("Review", 120, "w"),
+                "document": ("Documento", 520, "w"),
+                "consumed": ("Cons. (m)", 90, "center"),
+            },
+        )
+
+        sb_y = ttk.Scrollbar(area, orient="vertical", command=self.roll_items_tree.yview)
+        sb_y.grid(row=0, column=1, sticky="ns")
+        sb_x = ttk.Scrollbar(area, orient="horizontal", command=self.roll_items_tree.xview)
+        sb_x.grid(row=1, column=0, sticky="ew")
+        self.roll_items_tree.configure(yscrollcommand=sb_y.set, xscrollcommand=sb_x.set)
+
+        footer = ttk.Frame(area)
+        footer.grid(row=2, column=0, sticky="w", pady=(8, 0))
+        ttk.Button(footer, text="Remover item selecionado", command=self.remove_selected_item_from_roll).pack(side="left")
+        ttk.Button(footer, text="Ver detalhes", command=self.show_roll_detail_dialog).pack(side="left", padx=(8, 0))
+
+    def _build_logs_tab(self, master: tk.Misc) -> None:
+        filters = ttk.LabelFrame(master, text="Filtros", padding=8)
         filters.grid(row=0, column=0, sticky="ew", pady=(0, 8))
-        for col in range(9):
-            filters.columnconfigure(col, weight=1 if col in {1, 3, 5, 7} else 0)
+        for col in range(8):
+            filters.columnconfigure(col, weight=1 if col in {1, 3, 5} else 0)
 
         ttk.Label(filters, text="Status").grid(row=0, column=0, sticky="w", padx=(0, 6))
         self.log_status_combo = ttk.Combobox(filters, textvariable=self.log_status_var, state="readonly")
-        self.log_status_combo.grid(row=0, column=1, sticky="ew", padx=(0, 12))
+        self.log_status_combo.grid(row=0, column=1, sticky="ew", padx=(0, 10))
 
         ttk.Label(filters, text="Parse").grid(row=0, column=2, sticky="w", padx=(0, 6))
         self.log_parse_combo = ttk.Combobox(filters, textvariable=self.log_parse_status_var, state="readonly")
-        self.log_parse_combo.grid(row=0, column=3, sticky="ew", padx=(0, 12))
+        self.log_parse_combo.grid(row=0, column=3, sticky="ew", padx=(0, 10))
 
         ttk.Label(filters, text="Normalização").grid(row=0, column=4, sticky="w", padx=(0, 6))
-        self.log_normalized_combo = ttk.Combobox(
-            filters,
-            textvariable=self.log_normalized_status_var,
-            state="readonly",
-        )
-        self.log_normalized_combo.grid(row=0, column=5, sticky="ew", padx=(0, 12))
+        self.log_normalized_combo = ttk.Combobox(filters, textvariable=self.log_normalized_status_var, state="readonly")
+        self.log_normalized_combo.grid(row=0, column=5, sticky="ew", padx=(0, 10))
 
-        ttk.Label(filters, text="Busca").grid(row=0, column=6, sticky="w", padx=(0, 6))
-        ttk.Entry(filters, textvariable=self.log_search_var).grid(row=0, column=7, sticky="ew", padx=(0, 12))
+        ttk.Label(filters, text="Busca").grid(row=1, column=0, sticky="w", padx=(0, 6), pady=(8, 0))
+        ttk.Entry(filters, textvariable=self.log_search_var).grid(
+            row=1,
+            column=1,
+            columnspan=5,
+            sticky="ew",
+            padx=(0, 10),
+            pady=(8, 0),
+        )
 
         actions = ttk.Frame(filters)
-        actions.grid(row=0, column=8, sticky="e")
-        ttk.Button(actions, text="Limpar", command=self.clear_log_filters).pack(side="right")
-        ttk.Button(actions, text="Atualizar", command=self.refresh_logs).pack(side="right", padx=(0, 8))
+        actions.grid(row=1, column=6, columnspan=2, sticky="e", pady=(8, 0))
+        ttk.Button(actions, text="Aplicar", command=self.refresh_logs).pack(side="left")
+        ttk.Button(actions, text="Limpar", command=self.clear_log_filters).pack(side="left", padx=(8, 0))
 
-        self.logs_panel = TableListPanel(
-            master,
-            panel_title="Fila de logs",
-            count_label="Logs visíveis:",
-            count_var=self.logs_count_var,
-            tree_columns={
-                "log_id": ("ID", 70),
-                "source_name": ("Arquivo", 170),
-                "machine_raw": ("Máquina raw", 120),
-                "parse_status": ("Parse", 100),
-                "normalized_status": ("Normalização", 120),
-                "status": ("Legado", 100),
-                "captured_at": ("Capturado", 140),
-                "job_id": ("Job row", 90),
-                "error": ("Erro", 260),
-            },
-            left_aligned_columns={"source_name", "machine_raw", "parse_status", "normalized_status", "status", "error"},
-            footer_actions=[
-                ("Ver detalhe do log", self.show_selected_log_detail_dialog),
-                ("Atualizar logs", self.refresh_logs),
-            ],
+        area = ttk.LabelFrame(master, text="Fila de logs", padding=8)
+        area.grid(row=1, column=0, sticky="nsew")
+        area.columnconfigure(0, weight=1)
+        area.rowconfigure(1, weight=1)
+
+        top = ttk.Frame(area)
+        top.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        top.columnconfigure(1, weight=1)
+        ttk.Label(top, text="Logs visíveis:").grid(row=0, column=0, sticky="w")
+        ttk.Label(top, textvariable=self.logs_count_var, style="MetricValue.TLabel").grid(row=0, column=1, sticky="w", padx=(6, 0))
+
+        self.logs_tree = ttk.Treeview(
+            area,
+            columns=(
+                "log_id",
+                "source_name",
+                "machine_raw",
+                "parse_status",
+                "normalized_status",
+                "status",
+                "captured_at",
+                "job_id",
+                "error",
+            ),
+            show="headings",
+            selectmode="browse",
         )
-        self.logs_panel.grid(row=1, column=0, sticky="nsew")
-        self.logs_tree = self.logs_panel.tree
+        self.logs_tree.grid(row=1, column=0, sticky="nsew")
         self.logs_tree.bind("<Double-1>", lambda event: self.show_selected_log_detail_dialog())
 
-    def _build_roll_panel(self, master: tk.Misc) -> None:
-        self.roll_panel = RollItemsPanel(
-            master,
-            panel_title="Rolo em montagem",
-            title_var=self.roll_title_var,
-            meta_fields=[
-                ("Máquina", self.roll_machine_var),
-                ("Tecido", self.roll_fabric_var),
-                ("Status", self.roll_status_var),
-                ("Observação", self.roll_note_var),
-            ],
-            header_actions=[
-                ("Novo rolo", self.create_roll),
-                ("Fechar", self.close_active_roll),
-            ],
-            tree_columns={
-                "row_id": ("ID", 60),
-                "job_id": ("Job", 90),
-                "machine": ("Máquina", 80),
-                "fabric": ("Tecido", 110),
-                "review": ("Review", 110),
-                "document": ("Documento", 260),
-                "consumed": ("Cons. (m)", 90),
+        self._configure_tree_columns(
+            self.logs_tree,
+            {
+                "log_id": ("ID", 60, "center"),
+                "source_name": ("Arquivo", 190, "w"),
+                "machine_raw": ("Máquina raw", 100, "w"),
+                "parse_status": ("Parse", 90, "center"),
+                "normalized_status": ("Normalização", 110, "center"),
+                "status": ("Legado", 90, "center"),
+                "captured_at": ("Capturado", 140, "center"),
+                "job_id": ("Job row", 80, "center"),
+                "error": ("Erro", 260, "w"),
             },
-            left_aligned_columns={"fabric", "review", "document"},
         )
-        self.roll_panel.grid(row=0, column=0, sticky="nsew")
-        self.roll_items_tree = self.roll_panel.items_tree
 
-    def _build_summary_panel(self, master: tk.Misc) -> None:
-        self.summary_panel = RollSummaryPanel(
-            master,
-            width=SUMMARY_PANEL_WIDTH,
-            metrics=[
-                ("Jobs", self.roll_jobs_var),
-                ("Planejado", self.roll_planned_var),
-                ("Efetivo", self.roll_effective_var),
-                ("Gap", self.roll_gap_var),
-                ("Consumido", self.roll_consumed_var),
-                ("Pendentes", self.roll_pending_var),
-                ("Revisados OK", self.roll_ok_var),
-                ("Suspeitos", self.roll_suspicious_var),
-            ],
-            actions=[
-                ("Remover item", self.remove_selected_item_from_roll),
-                ("Exportar rolo", self.export_active_roll),
-                ("Atualizar resumo", self.refresh_active_roll_summary),
-                ("Ver detalhes", self.show_roll_detail_dialog),
-            ],
-        )
-        self.summary_panel.grid(row=0, column=0, sticky="nsew")
+        sb_y = ttk.Scrollbar(area, orient="vertical", command=self.logs_tree.yview)
+        sb_y.grid(row=1, column=1, sticky="ns")
+        sb_x = ttk.Scrollbar(area, orient="horizontal", command=self.logs_tree.xview)
+        sb_x.grid(row=2, column=0, sticky="ew")
+        self.logs_tree.configure(yscrollcommand=sb_y.set, xscrollcommand=sb_x.set)
+
+        footer = ttk.Frame(area)
+        footer.grid(row=3, column=0, sticky="w", pady=(8, 0))
+        ttk.Button(footer, text="Ver detalhe do log", command=self.show_selected_log_detail_dialog).pack(side="left")
+        ttk.Button(footer, text="Atualizar logs", command=self.refresh_logs).pack(side="left", padx=(8, 0))
+
+    def _meta_cell(self, master: tk.Misc, row: int, col: int, label: str, variable: tk.StringVar) -> None:
+        box = ttk.Frame(master, padding=(0, 2))
+        box.grid(row=row, column=col, sticky="w")
+        ttk.Label(box, text=f"{label}:").pack(anchor="w")
+        ttk.Label(box, textvariable=variable).pack(anchor="w")
+
+    def _configure_tree_columns(
+        self,
+        tree: ttk.Treeview,
+        columns: dict[str, tuple[str, int, str]],
+    ) -> None:
+        for column_id, (title, width, anchor) in columns.items():
+            tree.heading(column_id, text=title)
+            tree.column(column_id, width=width, minwidth=width, anchor=anchor, stretch=True)
 
     # ------------------------------------------------------------------
-    # Refresh / filter loading
+    # Refresh
     # ------------------------------------------------------------------
-
-    def clear_filters(self) -> None:
-        self.machine_var.set("ALL")
-        self.fabric_var.set("ALL")
-        self.review_status_var.set("REVIEWED_OK")
-        self.exclude_suspicious_var.set(False)
-        self.search_var.set("")
-        self.refresh_jobs()
-
-    def clear_log_filters(self) -> None:
-        self.log_status_var.set("ALL")
-        self.log_parse_status_var.set("ALL")
-        self.log_normalized_status_var.set("ALL")
-        self.log_search_var.set("")
-        self.refresh_logs()
 
     def refresh_all(self) -> None:
         self._load_filter_values()
@@ -456,42 +537,6 @@ class OperationsPanel(ttk.Frame):
         snapshot = self.service.get_operations_snapshot()
         self._apply_snapshot(snapshot)
 
-    def _load_filter_values(self) -> None:
-        values = self.service.get_filter_values()
-
-        machine_values = ["ALL", *values.get("machines", [])]
-        fabric_values = ["ALL", *values.get("fabrics", [])]
-        review_values = ["ALL", *values.get("review_statuses", [])]
-
-        self.machine_combo["values"] = machine_values
-        self.fabric_combo["values"] = fabric_values
-        self.review_combo["values"] = review_values
-
-        if self.machine_var.get() not in machine_values:
-            self.machine_var.set("ALL")
-        if self.fabric_var.get() not in fabric_values:
-            self.fabric_var.set("ALL")
-        if self.review_status_var.get() not in review_values:
-            self.review_status_var.set("REVIEWED_OK" if "REVIEWED_OK" in review_values else "ALL")
-
-    def _load_log_filter_values(self) -> None:
-        values = self.service.get_log_filter_values()
-
-        status_values = ["ALL", *values.get("statuses", [])]
-        parse_values = ["ALL", *values.get("parse_statuses", [])]
-        normalized_values = ["ALL", *values.get("normalized_statuses", [])]
-
-        self.log_status_combo["values"] = status_values
-        self.log_parse_combo["values"] = parse_values
-        self.log_normalized_combo["values"] = normalized_values
-
-        if self.log_status_var.get() not in status_values:
-            self.log_status_var.set("ALL")
-        if self.log_parse_status_var.get() not in parse_values:
-            self.log_parse_status_var.set("ALL")
-        if self.log_normalized_status_var.get() not in normalized_values:
-            self.log_normalized_status_var.set("ALL")
-
     def refresh_jobs(self) -> None:
         filters = AvailableJobsFilters(
             machine=self._none_if_all(self.machine_var.get()),
@@ -502,7 +547,7 @@ class OperationsPanel(ttk.Frame):
         )
 
         jobs = self.service.list_available_jobs(filters)
-        jobs = self._apply_text_search(jobs, self.search_var.get())
+        jobs = self._apply_job_search(jobs, self.search_var.get())
         self._populate_jobs_tree(jobs)
         self.jobs_count_var.set(str(len(jobs)))
 
@@ -514,6 +559,7 @@ class OperationsPanel(ttk.Frame):
             search=(self.log_search_var.get() or "").strip() or None,
             limit=None,
         )
+
         logs = self.service.list_log_queue(filters)
         self._populate_logs_tree(logs)
         self.logs_count_var.set(str(len(logs)))
@@ -534,6 +580,61 @@ class OperationsPanel(ttk.Frame):
         summary = self.service.get_roll_summary(self.active_roll_id)
         self.current_summary = summary
         self._apply_summary(summary)
+
+    # ------------------------------------------------------------------
+    # Filters
+    # ------------------------------------------------------------------
+
+    def clear_filters(self) -> None:
+        self.machine_var.set("ALL")
+        self.fabric_var.set("ALL")
+        self.review_status_var.set("ALL")
+        self.exclude_suspicious_var.set(False)
+        self.search_var.set("")
+        self.refresh_jobs()
+
+    def clear_log_filters(self) -> None:
+        self.log_status_var.set("ALL")
+        self.log_parse_status_var.set("ALL")
+        self.log_normalized_status_var.set("ALL")
+        self.log_search_var.set("")
+        self.refresh_logs()
+
+    def _load_filter_values(self) -> None:
+        values = self.service.get_filter_values()
+
+        machine_values = ["ALL", *values.get("machines", [])]
+        fabric_values = ["ALL", *values.get("fabrics", [])]
+        review_values = ["ALL", *values.get("review_statuses", [])]
+
+        self.machine_combo["values"] = machine_values
+        self.fabric_combo["values"] = fabric_values
+        self.review_combo["values"] = review_values
+
+        if self.machine_var.get() not in machine_values:
+            self.machine_var.set("ALL")
+        if self.fabric_var.get() not in fabric_values:
+            self.fabric_var.set("ALL")
+        if self.review_status_var.get() not in review_values:
+            self.review_status_var.set("ALL")
+
+    def _load_log_filter_values(self) -> None:
+        values = self.service.get_log_filter_values()
+
+        status_values = ["ALL", *values.get("statuses", [])]
+        parse_values = ["ALL", *values.get("parse_statuses", [])]
+        normalized_values = ["ALL", *values.get("normalized_statuses", [])]
+
+        self.log_status_combo["values"] = status_values
+        self.log_parse_combo["values"] = parse_values
+        self.log_normalized_combo["values"] = normalized_values
+
+        if self.log_status_var.get() not in status_values:
+            self.log_status_var.set("ALL")
+        if self.log_parse_status_var.get() not in parse_values:
+            self.log_parse_status_var.set("ALL")
+        if self.log_normalized_status_var.get() not in normalized_values:
+            self.log_normalized_status_var.set("ALL")
 
     # ------------------------------------------------------------------
     # Roll actions
@@ -566,18 +667,14 @@ class OperationsPanel(ttk.Frame):
             messagebox.showwarning("Operação", "Selecione um job para adicionar.", parent=self)
             return
 
-        summary = self.service.add_job_to_roll(roll_id=self.active_roll_id, job_row_id=job_row_id)
+        summary = self.service.add_job_to_roll(
+            roll_id=self.active_roll_id,
+            job_row_id=job_row_id,
+        )
         self.current_summary = summary
         self._apply_summary(summary)
         self.refresh_jobs()
         self.refresh_snapshot()
-
-        if summary.pending_review_count > 0:
-            messagebox.showwarning(
-                "Atenção",
-                "O rolo ativo contém jobs com PENDING_REVIEW.\n\nNo MVP eles continuam permitidos, mas devem ficar visíveis.",
-                parent=self,
-            )
 
     def remove_selected_item_from_roll(self) -> None:
         if self.active_roll_id is None:
@@ -597,7 +694,10 @@ class OperationsPanel(ttk.Frame):
         if not confirm:
             return
 
-        summary = self.service.remove_job_from_roll(roll_id=self.active_roll_id, job_row_id=job_row_id)
+        summary = self.service.remove_job_from_roll(
+            roll_id=self.active_roll_id,
+            job_row_id=job_row_id,
+        )
         self.current_summary = summary
         self._apply_summary(summary)
         self.refresh_jobs()
@@ -618,8 +718,7 @@ class OperationsPanel(ttk.Frame):
         if dialog.result_summary is None:
             return
 
-        closed_summary = dialog.result_summary
-        self.current_summary = closed_summary
+        self.current_summary = dialog.result_summary
 
         if dialog.export_result is not None:
             result_dialog = RollExportResultDialog(self.winfo_toplevel(), result=dialog.export_result)
@@ -627,7 +726,7 @@ class OperationsPanel(ttk.Frame):
         else:
             messagebox.showinfo(
                 "Fechamento concluído",
-                f"Rolo fechado com sucesso:\n{closed_summary.roll_name}",
+                f"Rolo fechado com sucesso:\n{self.current_summary.roll_name}",
                 parent=self,
             )
 
@@ -645,13 +744,16 @@ class OperationsPanel(ttk.Frame):
         if not directory:
             return
 
-        result = self.service.export_roll(roll_id=self.active_roll_id, output_dir=Path(directory))
+        result = self.service.export_roll(
+            roll_id=self.active_roll_id,
+            output_dir=Path(directory),
+        )
         result_dialog = RollExportResultDialog(self.winfo_toplevel(), result=result)
         self.wait_window(result_dialog)
         self.refresh_active_roll_summary()
 
     # ------------------------------------------------------------------
-    # Detail dialogs
+    # Dialogs
     # ------------------------------------------------------------------
 
     def show_roll_detail_dialog(self) -> None:
@@ -666,6 +768,7 @@ class OperationsPanel(ttk.Frame):
             f"Status: {s.status}\n"
             f"Máquina: {s.machine}\n"
             f"Tecido: {s.fabric or '-'}\n"
+            f"Observação: {s.note or '-'}\n"
             f"Jobs: {s.jobs_count}\n"
             f"Planejado: {fmt_m(s.total_planned_m)}\n"
             f"Efetivo: {fmt_m(s.total_effective_m)}\n"
@@ -673,8 +776,7 @@ class OperationsPanel(ttk.Frame):
             f"Consumido: {fmt_m(s.total_consumed_m)}\n"
             f"Pendentes: {s.pending_review_count}\n"
             f"Revisados OK: {s.reviewed_ok_count}\n"
-            f"Suspeitos: {s.suspicious_count}\n"
-            f"Observação: {s.note or '-'}"
+            f"Suspeitos: {s.suspicious_count}"
         )
         messagebox.showinfo("Detalhes do rolo", text, parent=self)
 
@@ -702,18 +804,15 @@ class OperationsPanel(ttk.Frame):
         messagebox.showinfo("Detalhe do log", text, parent=self)
 
     # ------------------------------------------------------------------
-    # Apply state to UI
+    # Apply state
     # ------------------------------------------------------------------
 
     def _apply_snapshot(self, snapshot: OperationsSnapshotDTO) -> None:
-        self.snapshot_available_jobs_var.set(str(snapshot.available_jobs_count))
-        self.snapshot_suspicious_jobs_var.set(str(snapshot.suspicious_jobs_count))
-        self.snapshot_open_rolls_var.set(str(snapshot.open_rolls_count))
+        alerts = snapshot.suspicious_jobs_count + snapshot.invalid_logs_count + snapshot.pending_logs_count
+        self.snapshot_jobs_var.set(str(snapshot.available_jobs_count))
+        self.snapshot_rolls_var.set(str(snapshot.open_rolls_count))
         self.snapshot_pending_logs_var.set(str(snapshot.pending_logs_count))
-        self.snapshot_ready_logs_var.set(str(snapshot.ready_logs_count))
-        self.snapshot_converted_logs_var.set(str(snapshot.converted_logs_count))
-        self.snapshot_invalid_logs_var.set(str(snapshot.invalid_logs_count))
-        self.snapshot_duplicated_logs_var.set(str(snapshot.duplicated_logs_count))
+        self.snapshot_alerts_var.set(str(alerts))
 
     def _apply_summary(self, summary: RollSummaryDTO) -> None:
         self.roll_title_var.set(f"{summary.roll_name} (ID {summary.roll_id})")
@@ -721,7 +820,6 @@ class OperationsPanel(ttk.Frame):
         self.roll_fabric_var.set(summary.fabric or "-")
         self.roll_status_var.set(summary.status)
         self.roll_note_var.set(summary.note or "-")
-
         self.roll_jobs_var.set(str(summary.jobs_count))
         self.roll_planned_var.set(fmt_m(summary.total_planned_m))
         self.roll_effective_var.set(fmt_m(summary.total_effective_m))
@@ -730,7 +828,6 @@ class OperationsPanel(ttk.Frame):
         self.roll_pending_var.set(str(summary.pending_review_count))
         self.roll_ok_var.set(str(summary.reviewed_ok_count))
         self.roll_suspicious_var.set(str(summary.suspicious_count))
-
         self._populate_roll_items_tree(summary.items)
 
     def _clear_roll_panel(self) -> None:
@@ -747,7 +844,7 @@ class OperationsPanel(ttk.Frame):
         self.roll_pending_var.set("0")
         self.roll_ok_var.set("0")
         self.roll_suspicious_var.set("0")
-        self._populate_roll_items_tree([])
+        clear_tree(self.roll_items_tree)
 
     # ------------------------------------------------------------------
     # Tree population
@@ -773,6 +870,23 @@ class OperationsPanel(ttk.Frame):
                 ),
             )
 
+    def _populate_roll_items_tree(self, items: Iterable[RollItemRow]) -> None:
+        clear_tree(self.roll_items_tree)
+        for item in items:
+            self.roll_items_tree.insert(
+                "",
+                "end",
+                values=(
+                    item.row_id or "-",
+                    item.job_id,
+                    item.machine,
+                    item.fabric or "-",
+                    item.review_status or "-",
+                    item.document,
+                    fmt_num(item.consumed_length_m),
+                ),
+            )
+
     def _populate_logs_tree(self, logs: Iterable[LogQueueRow]) -> None:
         clear_tree(self.logs_tree)
         for row in logs:
@@ -792,27 +906,11 @@ class OperationsPanel(ttk.Frame):
                 ),
             )
 
-    def _populate_roll_items_tree(self, items: Iterable[RollItemRow]) -> None:
-        rows = []
-        for item in items:
-            rows.append(
-                (
-                    item.row_id or "-",
-                    item.job_id,
-                    item.machine,
-                    item.fabric or "-",
-                    item.review_status or "-",
-                    item.document,
-                    fmt_num(item.consumed_length_m),
-                )
-            )
-        self.roll_panel.set_items(rows)
-
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
-    def _apply_text_search(self, jobs: list[AvailableJobRow], text: str) -> list[AvailableJobRow]:
+    def _apply_job_search(self, jobs: list[AvailableJobRow], text: str) -> list[AvailableJobRow]:
         term = (text or "").strip().lower()
         if not term:
             return jobs
@@ -837,9 +935,11 @@ class OperationsPanel(ttk.Frame):
         selection = tree.selection()
         if not selection:
             return None
+
         values = tree.item(selection[0], "values")
         if not values:
             return None
+
         try:
             return int(values[0])
         except (TypeError, ValueError):
@@ -862,8 +962,3 @@ def _fmt_dt(value: object) -> str:
         except Exception:
             return str(value)
     return str(value or "-")
-
-
-def _contains_search(term: str, *values: object) -> bool:
-    haystack = " ".join(str(value or "") for value in values).lower()
-    return term in haystack

@@ -1,3 +1,4 @@
+# ui/roll_items_panel.py
 from __future__ import annotations
 
 import tkinter as tk
@@ -18,6 +19,7 @@ class RollItemsPanel(ttk.LabelFrame):
 
     - título do rolo
     - metadados do rolo
+    - contadores rápidos do conteúdo exibido
     - tabela de itens do rolo
     - ações no cabeçalho (opcional)
 
@@ -51,8 +53,12 @@ class RollItemsPanel(ttk.LabelFrame):
         self.title_wraplength = title_wraplength
         self.helper_text = helper_text
 
+        self.items_count_var = tk.StringVar(value="0")
+        self.selected_count_var = tk.StringVar(value="0")
+        self.empty_state_var = tk.StringVar(value="Nenhum item no rolo.")
+
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(2, weight=1)
+        self.rowconfigure(3, weight=1)
 
         self.items_tree: ttk.Treeview
 
@@ -61,6 +67,7 @@ class RollItemsPanel(ttk.LabelFrame):
     def _build_ui(self) -> None:
         self._build_title_row()
         self._build_meta_row()
+        self._build_stats_row()
         self._build_items_box()
 
     def _build_title_row(self) -> None:
@@ -86,6 +93,14 @@ class RollItemsPanel(ttk.LabelFrame):
                 wraplength=self.title_wraplength,
                 justify="left",
             ).pack(anchor="w", pady=(2, 0))
+        else:
+            ttk.Label(
+                title_box,
+                text="Monte o rolo acompanhando os itens já adicionados e o contexto do fechamento.",
+                style="Muted.TLabel",
+                wraplength=self.title_wraplength,
+                justify="left",
+            ).pack(anchor="w", pady=(2, 0))
 
         if self.header_actions:
             buttons = ttk.Frame(title_row)
@@ -106,9 +121,33 @@ class RollItemsPanel(ttk.LabelFrame):
         for col, (label, variable) in enumerate(self.meta_fields):
             meta_cell(meta, row=0, col=col, label=label, variable=variable)
 
+    def _build_stats_row(self) -> None:
+        stats = ttk.Frame(self)
+        stats.grid(row=2, column=0, sticky="ew", pady=(0, 8))
+        stats.columnconfigure(0, weight=1)
+        stats.columnconfigure(1, weight=1)
+        stats.columnconfigure(2, weight=4)
+
+        box_items = ttk.Frame(stats, padding=(8, 6))
+        box_items.grid(row=0, column=0, sticky="w")
+        ttk.Label(box_items, text="Itens no rolo").pack(anchor="w")
+        ttk.Label(box_items, textvariable=self.items_count_var, style="MetricValue.TLabel").pack(anchor="w")
+
+        box_selected = ttk.Frame(stats, padding=(8, 6))
+        box_selected.grid(row=0, column=1, sticky="w")
+        ttk.Label(box_selected, text="Selecionado").pack(anchor="w")
+        ttk.Label(box_selected, textvariable=self.selected_count_var, style="MetricValue.TLabel").pack(anchor="w")
+
+        ttk.Label(
+            stats,
+            textvariable=self.empty_state_var,
+            style="Muted.TLabel",
+            justify="left",
+        ).grid(row=0, column=2, sticky="e")
+
     def _build_items_box(self) -> None:
         items_box = ttk.LabelFrame(self, text=self.tree_title, style="Section.TLabelframe", padding=6)
-        items_box.grid(row=2, column=0, sticky="nsew")
+        items_box.grid(row=3, column=0, sticky="nsew")
         items_box.columnconfigure(0, weight=1)
         items_box.rowconfigure(0, weight=1)
 
@@ -119,6 +158,7 @@ class RollItemsPanel(ttk.LabelFrame):
             selectmode="browse",
         )
         self.items_tree.grid(row=0, column=0, sticky="nsew")
+        self.items_tree.bind("<<TreeviewSelect>>", lambda event: self._update_selected_counter())
 
         sb_y = ttk.Scrollbar(items_box, orient="vertical", command=self.items_tree.yview)
         sb_y.grid(row=0, column=1, sticky="ns")
@@ -136,11 +176,21 @@ class RollItemsPanel(ttk.LabelFrame):
 
     def set_items(self, rows: Iterable[tuple]) -> None:
         clear_tree(self.items_tree)
+
+        count = 0
         for row in rows:
             self.items_tree.insert("", "end", values=row)
+            count += 1
+
+        self.items_count_var.set(str(count))
+        self.selected_count_var.set("0")
+        self.empty_state_var.set("Nenhum item no rolo." if count == 0 else "Selecione um item para remoção ou inspeção.")
 
     def clear_items(self) -> None:
         clear_tree(self.items_tree)
+        self.items_count_var.set("0")
+        self.selected_count_var.set("0")
+        self.empty_state_var.set("Nenhum item no rolo.")
 
     def get_selected_row_id(self) -> int | None:
         selection = self.items_tree.selection()
@@ -158,3 +208,6 @@ class RollItemsPanel(ttk.LabelFrame):
 
     def item_count(self) -> int:
         return len(self.items_tree.get_children())
+
+    def _update_selected_counter(self) -> None:
+        self.selected_count_var.set(str(len(self.items_tree.selection())))

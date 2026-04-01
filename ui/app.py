@@ -1,257 +1,177 @@
-# app.py
+# ui/app.py
 from __future__ import annotations
 
 import argparse
-
-from cli.commands import (
-    handle_add_job_to_roll,
-    handle_close_roll,
-    handle_create_roll,
-    handle_export_roll,
-    handle_import,
-    handle_list_jobs,
-    handle_list_rolls,
-    handle_remove_job_from_roll,
-    handle_show_roll,
-)
-from storage.database import init_database
+import sys
+import tkinter as tk
+from pathlib import Path
+from tkinter import messagebox
 
 
-UI_START_PAGES = ("home", "operations", "rolls")
+# Permite rodar tanto por:
+#   python -m ui.app
+# quanto por:
+#   python ui/app.py
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from application.log_sources_service import LogSourcesService
+from application.operations_panel_service import OperationsPanelService
+from storage.database import init_database, resolve_default_db_path
+from storage.repository import ProductionRepository
+from ui.main_window import MainWindow
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Nexor operational entrypoint")
+APP_TITLE = "Nexor"
+DEFAULT_START_PAGE = "home"
+VALID_START_PAGES = ("home", "operations", "rolls", "log_sources")
 
-    mode_group = parser.add_mutually_exclusive_group()
-    mode_group.add_argument(
-        "--ui",
-        action="store_true",
-        help="Abre a interface desktop do Nexor.",
-    )
-    mode_group.add_argument(
-        "--force-rescan",
-        action="store_true",
-        help="Ignora o checkpoint das fontes e relê todos os logs.",
-    )
-    mode_group.add_argument(
-        "--export-roll-id",
-        type=int,
-        help="Exporta um rolo fechado pelo ID.",
-    )
-    mode_group.add_argument(
-        "--list-rolls",
-        action="store_true",
-        help="Lista os rolos cadastrados no banco.",
-    )
-    mode_group.add_argument(
-        "--show-roll-id",
-        type=int,
-        help="Mostra o detalhe completo de um rolo pelo ID.",
-    )
-    mode_group.add_argument(
-        "--list-jobs",
-        action="store_true",
-        help="Lista jobs disponíveis para montagem de rolo.",
-    )
-    mode_group.add_argument(
-        "--create-roll",
-        action="store_true",
-        help="Cria um novo rolo em aberto.",
-    )
-    mode_group.add_argument(
-        "--add-job-to-roll",
-        action="store_true",
-        help="Adiciona um job disponível a um rolo em aberto.",
-    )
-    mode_group.add_argument(
-        "--remove-job-from-roll",
-        action="store_true",
-        help="Remove um job de um rolo em aberto.",
-    )
-    mode_group.add_argument(
-        "--close-roll-id",
-        type=int,
-        help="Fecha um rolo pelo ID.",
-    )
 
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Nexor desktop UI")
+    parser.add_argument(
+        "--db-path",
+        default=None,
+        help="Caminho opcional para o banco SQLite local.",
+    )
     parser.add_argument(
         "--page",
-        choices=UI_START_PAGES,
-        default="home",
-        help="Página inicial da interface quando usado com --ui.",
+        choices=VALID_START_PAGES,
+        default=DEFAULT_START_PAGE,
+        help="Página inicial da interface.",
+    )
+    return parser.parse_args(argv)
+
+
+def build_services(
+    db_path: str | Path | None = None,
+) -> tuple[OperationsPanelService, LogSourcesService, Path]:
+    target_db = init_database(db_path=db_path)
+
+    production_repository = ProductionRepository(db_path=target_db)
+    operations_service = OperationsPanelService(repository=production_repository)
+    log_sources_service = LogSourcesService(db_path=target_db)
+
+    return operations_service, log_sources_service, Path(target_db)
+
+
+def show_startup_error(exc: Exception) -> None:
+    message = (
+        "Falha ao iniciar a interface do Nexor.\n\n"
+        f"Motivo: {exc}"
     )
 
-    parser.add_argument(
-        "--export-output-dir",
-        default="exports/out",
-        help="Diretório de saída da exportação do rolo.",
-    )
-
-    parser.add_argument(
-        "--roll-status",
-        default="ALL",
-        help="Filtro de status ao listar rolos. Ex.: ALL, OPEN, CLOSED, EXPORTED.",
-    )
-
-    parser.add_argument(
-        "--machine",
-        help="Filtro de máquina para listar jobs disponíveis.",
-    )
-    parser.add_argument(
-        "--fabric",
-        help="Filtro de tecido para listar jobs disponíveis.",
-    )
-    parser.add_argument(
-        "--review-status",
-        default=None,
-        help="Filtro de review status para listar jobs. Ex.: PENDING_REVIEW, REVIEWED_OK.",
-    )
-    parser.add_argument(
-        "--exclude-suspicious",
-        action="store_true",
-        help="Exclui jobs suspeitos da listagem de jobs disponíveis.",
-    )
-    parser.add_argument(
-        "--limit",
-        type=int,
-        default=None,
-        help="Limite de resultados na listagem de jobs disponíveis.",
-    )
-
-    parser.add_argument(
-        "--roll-machine",
-        help="Máquina do rolo a ser criado. Ex.: M1, M2.",
-    )
-    parser.add_argument(
-        "--roll-fabric",
-        default=None,
-        help="Tecido do rolo a ser criado.",
-    )
-    parser.add_argument(
-        "--roll-note",
-        default=None,
-        help="Observação inicial do rolo a ser criado.",
-    )
-    parser.add_argument(
-        "--roll-name",
-        default=None,
-        help="Nome manual do rolo. Se omitido, o Nexor gera automaticamente.",
-    )
-
-    parser.add_argument(
-        "--target-roll-id",
-        type=int,
-        default=None,
-        help="ID do rolo alvo para adicionar/remover job.",
-    )
-    parser.add_argument(
-        "--job-row-id",
-        type=int,
-        default=None,
-        help="ID interno do job (row id) para adicionar/remover do rolo.",
-    )
-
-    parser.add_argument(
-        "--close-note",
-        default=None,
-        help="Observação adicional ao fechar o rolo.",
-    )
-
-    return parser.parse_args()
+    try:
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror(APP_TITLE, message, parent=root)
+        root.destroy()
+    except Exception:
+        print(message, file=sys.stderr)
 
 
-def run_ui(start_page: str = "home") -> int:
-    from ui.app import main as ui_main
+class NexorApp:
+    """
+    Bootstrap dedicado da interface desktop do Nexor.
 
-    argv: list[str] = []
-    if start_page and start_page != "home":
-        argv.extend(["--page", start_page])
+    Objetivos:
+    - garantir init_database ao abrir a UI diretamente
+    - montar MainWindow com serviços compartilhando o mesmo banco
+    - manter navegação inicial por página
+    """
 
-    return int(ui_main(argv))
+    def __init__(
+        self,
+        *,
+        db_path: str | Path | None = None,
+        start_page: str = DEFAULT_START_PAGE,
+    ) -> None:
+        self.db_path = Path(db_path) if db_path is not None else resolve_default_db_path()
+        self.start_page = start_page if start_page in VALID_START_PAGES else DEFAULT_START_PAGE
 
+        self.root = tk.Tk()
+        (
+            self.operations_service,
+            self.log_sources_service,
+            self.initialized_db_path,
+        ) = build_services(self.db_path)
 
-def main() -> int:
-    args = parse_args()
+        self.main_window: MainWindow | None = None
 
-    if args.ui:
-        return run_ui(start_page=args.page)
+        self._configure_root()
+        self._build_ui()
+        self._bind_shortcuts()
+        self._open_start_page()
 
-    init_database()
+    def _configure_root(self) -> None:
+        self.root.title(APP_TITLE)
+        self.root.columnconfigure(0, weight=1)
+        self.root.rowconfigure(0, weight=1)
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-    if args.export_roll_id is not None:
-        return handle_export_roll(
-            roll_id=args.export_roll_id,
-            output_dir=args.export_output_dir,
+    def _build_ui(self) -> None:
+        self.main_window = MainWindow(
+            self.root,
+            service=self.operations_service,
+            log_sources_service=self.log_sources_service,
         )
 
-    if args.list_rolls:
-        return handle_list_rolls(status=args.roll_status)
+    def _bind_shortcuts(self) -> None:
+        self.root.bind("<F5>", self._refresh_current_page)
+        self.root.bind("<Control-r>", self._refresh_current_page)
+        self.root.bind("<Control-R>", self._refresh_current_page)
 
-    if args.show_roll_id is not None:
-        return handle_show_roll(roll_id=args.show_roll_id)
+        self.root.bind("<Control-1>", lambda event: self._show_page("home"))
+        self.root.bind("<Control-2>", lambda event: self._show_page("operations"))
+        self.root.bind("<Control-3>", lambda event: self._show_page("rolls"))
+        self.root.bind("<Control-4>", lambda event: self._show_page("log_sources"))
 
-    if args.list_jobs:
-        return handle_list_jobs(
-            machine=args.machine,
-            fabric=args.fabric,
-            review_status=args.review_status,
-            include_suspicious=not args.exclude_suspicious,
-            limit=args.limit,
+        self.root.bind("<F1>", self._show_shortcuts_help)
+
+    def _open_start_page(self) -> None:
+        if self.main_window is not None:
+            self.main_window.show_page(self.start_page)
+
+    def _refresh_current_page(self, event: tk.Event | None = None) -> None:
+        if self.main_window is not None:
+            self.main_window.refresh_current_page()
+
+    def _show_page(self, key: str) -> None:
+        if self.main_window is not None:
+            self.main_window.show_page(key)
+
+    def _show_shortcuts_help(self, event: tk.Event | None = None) -> None:
+        text = (
+            "Atalhos disponíveis:\n\n"
+            "F5 / Ctrl+R  → Atualizar página atual\n"
+            "Ctrl+1       → Home\n"
+            "Ctrl+2       → Operação\n"
+            "Ctrl+3       → Rolos\n"
+            "Ctrl+4       → Fontes de logs\n"
+            "F1           → Mostrar esta ajuda"
         )
+        messagebox.showinfo(APP_TITLE, text, parent=self.root)
 
-    if args.create_roll:
-        if not args.roll_machine:
-            print("Status: ERRO")
-            print("Motivo: --roll-machine é obrigatório para --create-roll")
-            return 1
+    def _on_close(self) -> None:
+        self.root.destroy()
 
-        return handle_create_roll(
-            machine=args.roll_machine,
-            fabric=args.roll_fabric,
-            note=args.roll_note,
-            roll_name=args.roll_name,
+    def run(self) -> None:
+        self.root.mainloop()
+
+
+def main(argv: list[str] | None = None) -> int:
+    try:
+        args = parse_args(argv)
+        app = NexorApp(
+            db_path=args.db_path,
+            start_page=args.page,
         )
-
-    if args.add_job_to_roll:
-        if args.target_roll_id is None:
-            print("Status: ERRO")
-            print("Motivo: --target-roll-id é obrigatório para --add-job-to-roll")
-            return 1
-
-        if args.job_row_id is None:
-            print("Status: ERRO")
-            print("Motivo: --job-row-id é obrigatório para --add-job-to-roll")
-            return 1
-
-        return handle_add_job_to_roll(
-            roll_id=args.target_roll_id,
-            job_row_id=args.job_row_id,
-        )
-
-    if args.remove_job_from_roll:
-        if args.target_roll_id is None:
-            print("Status: ERRO")
-            print("Motivo: --target-roll-id é obrigatório para --remove-job-from-roll")
-            return 1
-
-        if args.job_row_id is None:
-            print("Status: ERRO")
-            print("Motivo: --job-row-id é obrigatório para --remove-job-from-roll")
-            return 1
-
-        return handle_remove_job_from_roll(
-            roll_id=args.target_roll_id,
-            job_row_id=args.job_row_id,
-        )
-
-    if args.close_roll_id is not None:
-        return handle_close_roll(
-            roll_id=args.close_roll_id,
-            note=args.close_note,
-        )
-
-    return handle_import(force_rescan=args.force_rescan)
+        app.run()
+        return 0
+    except Exception as exc:
+        show_startup_error(exc)
+        return 1
 
 
 if __name__ == "__main__":

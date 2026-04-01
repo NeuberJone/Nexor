@@ -1,11 +1,4 @@
-# Arquivo: ui/table_list_panel.py
-#
-# Resumo do que este arquivo implementa:
-# - mantém o painel reutilizável de listas com Treeview
-# - adiciona título auxiliar opcional no topo
-# - expõe métodos utilitários para limpar/contar/inserir linhas
-# - centraliza melhor a estrutura usada por Operação e Rolos
-
+# ui/table_list_panel.py
 from __future__ import annotations
 
 import tkinter as tk
@@ -21,8 +14,13 @@ class TableListPanel(ttk.LabelFrame):
     Estrutura:
     - título do painel
     - topo com contador
+    - helper opcional
     - tabela com scroll vertical/horizontal
     - ações inferiores opcionais
+
+    Objetivo:
+    - padronizar listas operacionais
+    - permitir browse ou seleção múltipla sem cada tela precisar remendar isso
     """
 
     def __init__(
@@ -36,6 +34,7 @@ class TableListPanel(ttk.LabelFrame):
         left_aligned_columns: set[str] | None = None,
         footer_actions: list[tuple[str, object]] | None = None,
         helper_text: str | None = None,
+        tree_selectmode: str = "browse",
     ) -> None:
         super().__init__(master, text=panel_title, style="Section.TLabelframe", padding=8)
 
@@ -47,6 +46,7 @@ class TableListPanel(ttk.LabelFrame):
         self.left_aligned_columns = left_aligned_columns or set()
         self.footer_actions = footer_actions or []
         self.helper_text = helper_text
+        self.tree_selectmode = tree_selectmode or "browse"
 
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
@@ -91,7 +91,7 @@ class TableListPanel(ttk.LabelFrame):
             tree_wrap,
             columns=tuple(self.tree_columns.keys()),
             show="headings",
-            selectmode="browse",
+            selectmode=self.tree_selectmode,
         )
         self.tree.grid(row=0, column=0, sticky="nsew")
 
@@ -134,3 +134,38 @@ class TableListPanel(ttk.LabelFrame):
         for row in rows:
             self.insert_row(tuple(row))
         self.set_count(len(rows))
+
+    def get_selected_values(self) -> list[tuple]:
+        values: list[tuple] = []
+        for item_id in self.tree.selection():
+            item_values = self.tree.item(item_id, "values")
+            if item_values:
+                values.append(tuple(item_values))
+        return values
+
+    def get_selected_first_value_as_int(self) -> int | None:
+        selection = self.tree.selection()
+        if not selection:
+            return None
+
+        values = self.tree.item(selection[0], "values")
+        if not values:
+            return None
+
+        try:
+            return int(values[0])
+        except (TypeError, ValueError):
+            return None
+
+    def select_all_rows(self) -> None:
+        children = self.tree.get_children()
+        if not children:
+            return
+
+        self.tree.selection_set(children)
+        self.tree.focus(children[0])
+
+    def clear_selection(self) -> None:
+        current = self.tree.selection()
+        if current:
+            self.tree.selection_remove(current)

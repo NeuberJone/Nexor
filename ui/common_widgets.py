@@ -1,24 +1,21 @@
-# Arquivo: ui/common_widgets.py
-#
-# Resumo do que este arquivo implementa:
-# - centraliza estilos compartilhados da UI
-# - adiciona helpers de formatação mais defensivos
-# - mantém helpers reutilizáveis para Treeview, métricas e metadados
-# - evita duplicação de limpeza/configuração entre Home, Operação e Rolos
-
+# ui/common_widgets.py
 from __future__ import annotations
 
 import tkinter as tk
 from tkinter import ttk
 
 
-TREE_ROW_HEIGHT = 26
+TREE_ROW_HEIGHT = 24
 
 
 def apply_common_styles() -> None:
     """
     Aplica estilos compartilhados da UI local.
-    Pode ser chamado várias vezes sem problema.
+
+    Direção atual:
+    - visual simples
+    - legibilidade antes de refinamento
+    - seguro para chamar várias vezes
     """
     style = ttk.Style()
     try:
@@ -45,7 +42,7 @@ def configure_tree_columns(
     for col, (title, width) in spec.items():
         tree.heading(col, text=title)
         anchor = "w" if col in left_aligned else "center"
-        tree.column(col, width=width, minwidth=width, anchor=anchor)
+        tree.column(col, width=width, minwidth=width, anchor=anchor, stretch=True)
 
 
 def clear_tree(tree: ttk.Treeview) -> None:
@@ -113,11 +110,13 @@ def fmt_percent(value: float | None, *, scale_100: bool = True) -> str:
 def fmt_dt(value: object, *, empty: str = "-") -> str:
     if value is None:
         return empty
+
     if hasattr(value, "strftime"):
         try:
             return value.strftime("%d/%m/%Y %H:%M")
         except Exception:
             return str(value)
+
     text = str(value).strip()
     return text or empty
 

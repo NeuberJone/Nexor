@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import tkinter as tk
-from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
 from application.log_sources_service import (
@@ -10,17 +9,7 @@ from application.log_sources_service import (
     LogSourceRow,
     LogSourcesService,
 )
-from ui.common_widgets import (
-    apply_common_styles,
-    clear_tree,
-    meta_cell,
-    metric_cell,
-)
-from ui.table_list_panel import TableListPanel
-from ui.workspace_layout import TwoRowWorkspace
-
-
-SUMMARY_PANEL_WIDTH = 300
+from ui.common_widgets import apply_common_styles, clear_tree
 
 
 class CreateLogSourceDialog(tk.Toplevel):
@@ -112,12 +101,13 @@ class CreateLogSourceDialog(tk.Toplevel):
 
 class LogSourcesPanel(ttk.Frame):
     """
-    Painel content-only para gestão das fontes de logs.
+    Tela simplificada de Fontes para testes funcionais.
 
-    Regras:
-    - a UI só conversa com LogSourcesService
-    - nada de SQL direto ou regra operacional na tela
-    - pensado para operador conferir e ajustar as fontes do import local
+    Estrutura:
+    - filtros básicos
+    - resumo curto
+    - lista de fontes
+    - detalhe simples da fonte selecionada
     """
 
     def __init__(self, master: tk.Misc, service: LogSourcesService | None = None) -> None:
@@ -151,6 +141,7 @@ class LogSourcesPanel(ttk.Frame):
         self.detail_last_run_notes_var = tk.StringVar(value="-")
 
         self.current_source_id: int | None = None
+        self.snapshot = None
 
         self.sources_tree: ttk.Treeview
 
@@ -158,21 +149,26 @@ class LogSourcesPanel(ttk.Frame):
         self._build_ui()
         self.refresh_all()
 
+    # ------------------------------------------------------------------
+    # Build
+    # ------------------------------------------------------------------
+
     def _build_ui(self) -> None:
         self.grid(row=0, column=0, sticky="nsew")
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(1, weight=1)
+        self.rowconfigure(2, weight=1)
 
         self._build_filters()
-        self._build_body()
+        self._build_summary()
+        self._build_main_content()
 
     def _build_filters(self) -> None:
-        filters = ttk.LabelFrame(self, text="Filtros", style="Section.TLabelframe", padding=10)
+        filters = ttk.LabelFrame(self, text="Filtros", padding=8)
         filters.grid(row=0, column=0, sticky="ew", pady=(0, 8))
         filters.columnconfigure(1, weight=1)
 
         ttk.Label(filters, text="Busca").grid(row=0, column=0, sticky="w", padx=(0, 8))
-        ttk.Entry(filters, textvariable=self.search_var).grid(row=0, column=1, sticky="ew", padx=(0, 12))
+        ttk.Entry(filters, textvariable=self.search_var).grid(row=0, column=1, sticky="ew", padx=(0, 10))
 
         ttk.Checkbutton(
             filters,
@@ -181,115 +177,152 @@ class LogSourcesPanel(ttk.Frame):
         ).grid(row=0, column=2, sticky="w")
 
         actions = ttk.Frame(filters)
-        actions.grid(row=1, column=0, columnspan=3, sticky="e", pady=(10, 0))
-        ttk.Button(actions, text="Limpar filtros", command=self.clear_filters).pack(side="right")
-        ttk.Button(actions, text="Atualizar", command=self.refresh_all).pack(side="right", padx=(0, 8))
-        ttk.Button(actions, text="Aplicar filtros", command=self.refresh_table).pack(side="right", padx=(0, 8))
+        actions.grid(row=1, column=0, columnspan=3, sticky="e", pady=(8, 0))
+        ttk.Button(actions, text="Aplicar filtros", command=self.refresh_table).pack(side="left")
+        ttk.Button(actions, text="Atualizar", command=self.refresh_all).pack(side="left", padx=(8, 0))
+        ttk.Button(actions, text="Limpar filtros", command=self.clear_filters).pack(side="left", padx=(8, 0))
 
-    def _build_body(self) -> None:
-        workspace = TwoRowWorkspace(
-            self,
-            right_width=SUMMARY_PANEL_WIDTH,
-            top_weight=3,
-            bottom_weight=2,
+    def _build_summary(self) -> None:
+        summary = ttk.LabelFrame(self, text="Resumo rápido", padding=8)
+        summary.grid(row=1, column=0, sticky="ew", pady=(0, 8))
+
+        for col in range(6):
+            summary.columnconfigure(col, weight=1)
+
+        self._summary_cell(summary, 0, "Total", self.total_var)
+        self._summary_cell(summary, 1, "Habilitadas", self.enabled_var)
+        self._summary_cell(summary, 2, "Desabilitadas", self.disabled_var)
+        self._summary_cell(summary, 3, "Com checkpoint", self.checkpoints_var)
+        self._summary_cell(summary, 4, "Com runs", self.runs_var)
+        self._summary_cell(summary, 5, "Com erros", self.errors_var)
+
+    def _summary_cell(self, master: tk.Misc, column: int, label: str, var: tk.StringVar) -> None:
+        box = ttk.Frame(master, padding=(6, 2))
+        box.grid(row=0, column=column, sticky="w")
+        ttk.Label(box, text=label).pack(anchor="w")
+        ttk.Label(box, textvariable=var, style="MetricValue.TLabel").pack(anchor="w")
+
+    def _build_main_content(self) -> None:
+        content = ttk.Frame(self)
+        content.grid(row=2, column=0, sticky="nsew")
+        content.columnconfigure(0, weight=2)
+        content.columnconfigure(1, weight=2)
+        content.rowconfigure(0, weight=1)
+
+        self._build_sources_list(content)
+        self._build_detail_panel(content)
+
+    def _build_sources_list(self, master: tk.Misc) -> None:
+        area = ttk.LabelFrame(master, text="Fontes cadastradas", padding=8)
+        area.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        area.columnconfigure(0, weight=1)
+        area.rowconfigure(1, weight=1)
+
+        top = ttk.Frame(area)
+        top.grid(row=0, column=0, sticky="ew", pady=(0, 6))
+        top.columnconfigure(1, weight=1)
+
+        ttk.Label(top, text="Total visível:").grid(row=0, column=0, sticky="w")
+        ttk.Label(top, textvariable=self.sources_count_var, style="MetricValue.TLabel").grid(
+            row=0, column=1, sticky="w", padx=(6, 0)
         )
-        workspace.grid(row=1, column=0, sticky="nsew")
 
-        self._build_sources_list_panel(workspace.left_top)
-        self._build_detail_panel(workspace.left_bottom)
-        self._build_summary_panel(workspace.right_panel)
-
-    def _build_sources_list_panel(self, master: tk.Misc) -> None:
-        panel = TableListPanel(
-            master,
-            panel_title="Fontes de logs",
-            count_label="Total visível:",
-            count_var=self.sources_count_var,
-            tree_columns={
-                "source_id": ("ID", 60),
-                "name": ("Nome", 180),
-                "machine_hint": ("Machine", 90),
-                "enabled": ("Ativa", 70),
-                "recursive": ("Rec.", 60),
-                "path": ("Caminho", 420),
-                "checkpoint": ("Checkpoint", 120),
-                "last_run": ("Última execução", 140),
-            },
-            left_aligned_columns={"name", "path"},
-            footer_actions=[
-                ("Nova fonte", self.create_source),
-                ("Habilitar / Desabilitar", self.toggle_selected_source),
-                ("Resetar checkpoint", self.reset_selected_checkpoint),
-                ("Remover", self.delete_selected_source),
-                ("Atualizar", self.refresh_all),
-            ],
+        self.sources_tree = ttk.Treeview(
+            area,
+            columns=("source_id", "name", "machine_hint", "enabled", "recursive", "path", "checkpoint", "last_run"),
+            show="headings",
+            selectmode="browse",
         )
-        panel.grid(row=0, column=0, sticky="nsew")
-
-        self.sources_tree = panel.tree
+        self.sources_tree.grid(row=1, column=0, sticky="nsew")
         self.sources_tree.bind("<<TreeviewSelect>>", lambda event: self.load_selected_source_detail())
         self.sources_tree.bind("<Double-1>", lambda event: self.toggle_selected_source())
 
+        self._configure_tree_columns(
+            self.sources_tree,
+            {
+                "source_id": ("ID", 60, "center"),
+                "name": ("Nome", 180, "w"),
+                "machine_hint": ("Machine", 90, "center"),
+                "enabled": ("Ativa", 70, "center"),
+                "recursive": ("Rec.", 60, "center"),
+                "path": ("Caminho", 360, "w"),
+                "checkpoint": ("Checkpoint", 110, "center"),
+                "last_run": ("Última execução", 140, "center"),
+            },
+        )
+
+        sb_y = ttk.Scrollbar(area, orient="vertical", command=self.sources_tree.yview)
+        sb_y.grid(row=1, column=1, sticky="ns")
+        sb_x = ttk.Scrollbar(area, orient="horizontal", command=self.sources_tree.xview)
+        sb_x.grid(row=2, column=0, sticky="ew")
+        self.sources_tree.configure(yscrollcommand=sb_y.set, xscrollcommand=sb_x.set)
+
+        footer = ttk.Frame(area)
+        footer.grid(row=3, column=0, sticky="w", pady=(8, 0))
+        ttk.Button(footer, text="Nova fonte", command=self.create_source).pack(side="left")
+        ttk.Button(footer, text="Alternar ativa", command=self.toggle_selected_source).pack(side="left", padx=(8, 0))
+        ttk.Button(footer, text="Resetar checkpoint", command=self.reset_selected_checkpoint).pack(side="left", padx=(8, 0))
+        ttk.Button(footer, text="Remover", command=self.delete_selected_source).pack(side="left", padx=(8, 0))
+
     def _build_detail_panel(self, master: tk.Misc) -> None:
-        panel = ttk.LabelFrame(master, text="Detalhes da fonte", style="Section.TLabelframe", padding=10)
-        panel.grid(row=0, column=0, sticky="nsew")
+        panel = ttk.LabelFrame(master, text="Detalhe da fonte", padding=8)
+        panel.grid(row=0, column=1, sticky="nsew")
         panel.columnconfigure(0, weight=1)
         panel.columnconfigure(1, weight=1)
 
         ttk.Label(panel, textvariable=self.detail_title_var, style="PanelTitle.TLabel").grid(
-            row=0, column=0, columnspan=2, sticky="w", pady=(0, 8)
+            row=0,
+            column=0,
+            columnspan=2,
+            sticky="w",
+            pady=(0, 8),
         )
 
-        meta_cell(panel, row=1, col=0, label="Nome", variable=self.detail_name_var, wraplength=320)
-        meta_cell(panel, row=1, col=1, label="Machine hint", variable=self.detail_machine_hint_var, wraplength=220)
-        meta_cell(panel, row=2, col=0, label="Caminho", variable=self.detail_path_var, wraplength=420)
-        meta_cell(panel, row=2, col=1, label="Ativa", variable=self.detail_enabled_var)
-        meta_cell(panel, row=3, col=0, label="Recursiva", variable=self.detail_recursive_var)
-        meta_cell(panel, row=3, col=1, label="Último scan", variable=self.detail_last_scan_var)
-        meta_cell(panel, row=4, col=0, label="Checkpoint", variable=self.detail_checkpoint_var)
-        meta_cell(panel, row=4, col=1, label="Criada em", variable=self.detail_created_var)
-        meta_cell(panel, row=5, col=0, label="Atualizada em", variable=self.detail_updated_var)
-        meta_cell(panel, row=5, col=1, label="Último run iniciado", variable=self.detail_last_run_start_var)
-        meta_cell(panel, row=6, col=0, label="Último run finalizado", variable=self.detail_last_run_finish_var)
-        meta_cell(panel, row=6, col=1, label="Resultado do último run", variable=self.detail_last_run_counts_var)
-        meta_cell(panel, row=7, col=0, label="Notas do último run", variable=self.detail_last_run_notes_var, wraplength=420)
+        self._detail_cell(panel, 1, 0, "Nome", self.detail_name_var)
+        self._detail_cell(panel, 1, 1, "Machine hint", self.detail_machine_hint_var)
+        self._detail_cell(panel, 2, 0, "Caminho", self.detail_path_var, wraplength=380)
+        self._detail_cell(panel, 2, 1, "Ativa", self.detail_enabled_var)
+        self._detail_cell(panel, 3, 0, "Recursiva", self.detail_recursive_var)
+        self._detail_cell(panel, 3, 1, "Último scan", self.detail_last_scan_var)
+        self._detail_cell(panel, 4, 0, "Checkpoint", self.detail_checkpoint_var)
+        self._detail_cell(panel, 4, 1, "Criada em", self.detail_created_var)
+        self._detail_cell(panel, 5, 0, "Atualizada em", self.detail_updated_var)
+        self._detail_cell(panel, 5, 1, "Último run iniciado", self.detail_last_run_start_var)
+        self._detail_cell(panel, 6, 0, "Último run finalizado", self.detail_last_run_finish_var)
+        self._detail_cell(panel, 6, 1, "Resultado do último run", self.detail_last_run_counts_var, wraplength=320)
+        self._detail_cell(panel, 7, 0, "Notas do último run", self.detail_last_run_notes_var, wraplength=380)
 
-        actions = ttk.Frame(panel)
-        actions.grid(row=8, column=0, columnspan=2, sticky="w", pady=(12, 0))
-        ttk.Button(actions, text="Nova fonte", command=self.create_source).pack(side="left")
-        ttk.Button(actions, text="Alternar ativa", command=self.toggle_selected_source).pack(side="left", padx=(8, 0))
-        ttk.Button(actions, text="Resetar checkpoint", command=self.reset_selected_checkpoint).pack(side="left", padx=(8, 0))
-
-    def _build_summary_panel(self, master: tk.Misc) -> None:
-        panel = ttk.LabelFrame(master, text="Resumo", style="Section.TLabelframe", padding=10)
-        panel.grid(row=0, column=0, sticky="nsew")
-        panel.columnconfigure(0, weight=1)
-
-        metrics = ttk.Frame(panel)
-        metrics.grid(row=0, column=0, sticky="ew")
-        metrics.columnconfigure(0, weight=1)
-
-        metric_cell(metrics, row=0, col=0, label="Total", variable=self.total_var)
-        metric_cell(metrics, row=1, col=0, label="Habilitadas", variable=self.enabled_var)
-        metric_cell(metrics, row=2, col=0, label="Desabilitadas", variable=self.disabled_var)
-        metric_cell(metrics, row=3, col=0, label="Com checkpoint", variable=self.checkpoints_var)
-        metric_cell(metrics, row=4, col=0, label="Com runs", variable=self.runs_var)
-        metric_cell(metrics, row=5, col=0, label="Com erros", variable=self.errors_var)
-
-        ttk.Separator(panel, orient="horizontal").grid(row=1, column=0, sticky="ew", pady=(10, 10))
-
-        ttk.Label(panel, text="Ações sugeridas", style="PanelTitle.TLabel").grid(row=2, column=0, sticky="w")
+    def _detail_cell(
+        self,
+        master: tk.Misc,
+        row: int,
+        col: int,
+        label: str,
+        variable: tk.StringVar,
+        wraplength: int | None = None,
+    ) -> None:
+        box = ttk.Frame(master, padding=(0, 2))
+        box.grid(row=row, column=col, sticky="nw", padx=(0, 12), pady=(0, 4))
+        ttk.Label(box, text=f"{label}:").pack(anchor="w")
         ttk.Label(
-            panel,
-            text=(
-                "• Cadastre as pastas que concentram os logs reais.\n"
-                "• Use machine hint para ajudar a identificar a origem.\n"
-                "• Resetar checkpoint força nova leitura da fonte no próximo ciclo.\n"
-                "• Fontes desabilitadas permanecem cadastradas, mas saem do fluxo."
-            ),
+            box,
+            textvariable=variable,
+            wraplength=wraplength if wraplength is not None else 240,
             justify="left",
-            wraplength=250,
-        ).grid(row=3, column=0, sticky="nw", pady=(6, 0))
+        ).pack(anchor="w")
+
+    def _configure_tree_columns(
+        self,
+        tree: ttk.Treeview,
+        columns: dict[str, tuple[str, int, str]],
+    ) -> None:
+        for column_id, (title, width, anchor) in columns.items():
+            tree.heading(column_id, text=title)
+            tree.column(column_id, width=width, minwidth=width, anchor=anchor, stretch=True)
+
+    # ------------------------------------------------------------------
+    # Refresh
+    # ------------------------------------------------------------------
 
     def clear_filters(self) -> None:
         self.search_var.set("")
@@ -303,7 +336,7 @@ class LogSourcesPanel(ttk.Frame):
 
     def refresh_table(self) -> None:
         previous_id = self.current_source_id
-        rows = self.snapshot.rows if hasattr(self, "snapshot") else self.service.list_sources(include_disabled=True)
+        rows = self.snapshot.rows if self.snapshot is not None else self.service.list_sources(include_disabled=True)
 
         if not self.include_disabled_var.get():
             rows = [row for row in rows if row.enabled]
@@ -334,7 +367,12 @@ class LogSourcesPanel(ttk.Frame):
         if selected_item is not None:
             self.sources_tree.selection_set(selected_item)
             self.sources_tree.focus(selected_item)
+            self.sources_tree.see(selected_item)
             self.load_selected_source_detail()
+
+    # ------------------------------------------------------------------
+    # Actions
+    # ------------------------------------------------------------------
 
     def create_source(self) -> None:
         dialog = CreateLogSourceDialog(self.winfo_toplevel())
@@ -378,8 +416,7 @@ class LogSourcesPanel(ttk.Frame):
 
         confirm = messagebox.askyesno(
             "Resetar checkpoint",
-            f"Deseja resetar o checkpoint da fonte '{row.name}'?\n\n"
-            "No próximo ciclo ela poderá ser relida desde o início.",
+            f"Deseja resetar o checkpoint da fonte '{row.name}'?\n\nNo próximo ciclo ela poderá ser relida desde o início.",
             parent=self,
         )
         if not confirm:
@@ -417,6 +454,10 @@ class LogSourcesPanel(ttk.Frame):
         self.current_source_id = None
         self.refresh_all()
 
+    # ------------------------------------------------------------------
+    # Detail loading
+    # ------------------------------------------------------------------
+
     def load_selected_source_detail(self) -> None:
         row = self._get_selected_source()
         if row is None:
@@ -425,6 +466,10 @@ class LogSourcesPanel(ttk.Frame):
 
         self.current_source_id = row.source_id
         self._apply_detail(row)
+
+    # ------------------------------------------------------------------
+    # Apply state
+    # ------------------------------------------------------------------
 
     def _populate_sources_tree(self, rows: list[LogSourceRow]) -> None:
         clear_tree(self.sources_tree)
@@ -488,6 +533,10 @@ class LogSourcesPanel(ttk.Frame):
         self.detail_last_run_finish_var.set("-")
         self.detail_last_run_counts_var.set("-")
         self.detail_last_run_notes_var.set("-")
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
 
     def _get_selected_source(self) -> LogSourceRow | None:
         selection = self.sources_tree.selection()

@@ -1,3 +1,4 @@
+# storage/database.py
 from __future__ import annotations
 
 import sqlite3
@@ -41,10 +42,10 @@ def get_connection(db_path: str | Path | None = None) -> sqlite3.Connection:
 
 def init_database(db_path: str | Path | None = None) -> Path:
     """
-    Initialize the database from schema.sql and apply runtime compatibility
-    safeguards used by the repositories.
+    Inicializa o banco a partir do schema.sql e aplica a camada de
+    compatibilidade/runtime usada pelos repositórios.
 
-    Returns the final database path in use.
+    Retorna o caminho final do banco em uso.
     """
     target = Path(db_path) if db_path is not None else DB_PATH
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -59,14 +60,13 @@ def init_database(db_path: str | Path | None = None) -> Path:
     finally:
         conn.close()
 
-    # Runtime compatibility / migration layer for existing databases
-    # Import locally to avoid unnecessary import coupling at module load time.
-    from storage.repository import ProductionRepository
-    from storage.log_sources_repository import LogSourceRepository
+    # Import local para evitar acoplamento desnecessário no carregamento.
     from storage.import_audit_repository import ImportAuditRepository
+    from storage.log_sources_repository import LogSourceRepository
+    from storage.repository import ProductionRepository
 
     ProductionRepository(db_path=target).ensure_runtime_fields()
-    LogSourceRepository().ensure_runtime_fields()
-    ImportAuditRepository().ensure_runtime_tables()
+    LogSourceRepository(db_path=target).ensure_runtime_fields()
+    ImportAuditRepository(db_path=target).ensure_runtime_tables()
 
     return target

@@ -1,3 +1,4 @@
+# application/operations_panel_service.py
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -7,6 +8,9 @@ from typing import Any
 
 from core.models import (
     LOG_CONVERTED,
+    LOG_DUPLICATED,
+    LOG_IGNORED,
+    LOG_INVALID,
     LOG_NEW,
     LOG_NORMALIZATION_CONVERTED,
     LOG_NORMALIZATION_PENDING,
@@ -67,6 +71,19 @@ class AvailableJobRow:
     suspicion_reason: str | None
     start_time: datetime | None
     end_time: datetime | None
+
+
+@dataclass(slots=True)
+class AvailableJobGroupRow:
+    fabric: str
+    machine: str
+    jobs_count: int
+    total_effective_m: float
+    total_gap_m: float
+    total_consumed_m: float
+    newest_end: datetime | None
+    oldest_end: datetime | None
+    rows: list[AvailableJobRow]
 
 
 @dataclass(slots=True)
@@ -159,10 +176,10 @@ class OperationsPanelService:
     """
     Application service para o painel operacional local.
 
-    Responsabilidades:
-    - servir dados já prontos para a UI
-    - reaproveitar o núcleo validado
-    - evitar que a UI conheça detalhes do repository/export service
+    Direção atual:
+    - manter a regra de negócio fora da UI
+    - entregar dados já organizados no estilo operacional do PXPrintLogs
+    - preservar compatibilidade com a UI simplificada já montada
     """
 
     def __init__(self, repository: ProductionRepository | None = None) -> None:
@@ -185,7 +202,60 @@ class OperationsPanelService:
             include_suspicious=not filters.exclude_suspicious,
             limit=filters.limit,
         )
-        return [self._map_available_job(job) for job in jobs]
+
+        rows = [self._map_available_job(job) for job in jobs]
+        return self._sort_available_jobs(rows)
+
+    def list_available_job_groups(
+        self,
+        filters: AvailableJobsFilters | None = None,
+    ) -> list[AvailableJobGroupRow]:
+        rows = self.list_available_jobs(filters)
+        grouped: dict[tuple[str, str], list[AvailableJobRow]] = {}
+
+        for row in rows:
+            key = (
+                (row.fabric or "SEM TECIDO").strip().upper(),
+                (row.machine or "SEM MÁQUINA").strip().upper(),
+            )
+            grouped.setdefault(key, []).append(row)
+
+        out: list[AvailableJobGroupRow] = []
+        for (fabric_key, machine_key), items in grouped.items():
+            newest_end = None
+            oldest_end = None
+
+            for item in items:
+                ref_dt = item.end_time or item.start_time
+                if ref_dt is None:
+                    continue
+                if newest_end is None or ref_dt > newest_end:
+                    newest_end = ref_dt
+                if oldest_end is None or ref_dt < oldest_end:
+                    oldest_end = ref_dt
+
+            out.append(
+                AvailableJobGroupRow(
+                    fabric=fabric_key,
+                    machine=machine_key,
+                    jobs_count=len(items),
+                    total_effective_m=sum(item.effective_printed_length_m for item in items),
+                    total_gap_m=sum(item.gap_before_m for item in items),
+                    total_consumed_m=sum(item.consumed_length_m for item in items),
+                    newest_end=newest_end,
+                    oldest_end=oldest_end,
+                    rows=items,
+                )
+            )
+
+        out.sort(
+            key=lambda group: (
+                group.fabric,
+                group.machine,
+                -_dt_rank(group.newest_end),
+            )
+        )
+        return out
 
     def get_filter_values(self) -> dict[str, list[str]]:
         jobs = self.list_available_jobs(AvailableJobsFilters(limit=None))
@@ -222,7 +292,8 @@ class OperationsPanelService:
         if filters.search:
             term = filters.search.strip().lower()
             rows = [
-                row for row in rows
+                row
+                for row in rows
                 if _contains_search(
                     term,
                     row.log_id,
@@ -237,6 +308,13 @@ class OperationsPanelService:
                 )
             ]
 
+        rows.sort(
+            key=lambda row: (
+                0 if row.is_actionable else 1,
+                -_dt_rank(row.captured_at or row.imported_at),
+                -int(row.log_id),
+            )
+        )
         return rows
 
     def get_log_filter_values(self) -> dict[str, list[str]]:
@@ -284,8 +362,16 @@ class OperationsPanelService:
 
             rows.append(row)
 
-            if filters.limit is not None and len(rows) >= filters.limit:
-                break
+        rows.sort(
+            key=lambda row: (
+                0 if row.status == ROLL_OPEN else 1,
+                -_dt_rank(row.created_at),
+                -int(row.roll_id),
+            )
+        )
+
+        if filters.limit is not None:
+            rows = rows[: int(filters.limit)]
 
         return rows
 
@@ -363,33 +449,49 @@ class OperationsPanelService:
         logs = self.repository.list_logs(limit=None)
 
         suspicious_jobs_count = sum(
-            1 for job in available_jobs
+            1
+            for job in available_jobs
             if bool(getattr(job, "suspicion_category", None) or getattr(job, "suspicion_reason", None))
         )
 
         pending_logs_count = sum(
-            1 for log in logs if (getattr(log, "parse_status", "") or "").upper() == LOG_PARSE_NEW
+            1
+            for log in logs
+            if (getattr(log, "parse_status", "") or "").upper() == LOG_PARSE_NEW
         )
         parsed_logs_count = sum(
-            1 for log in logs if (getattr(log, "parse_status", "") or "").upper() == LOG_PARSE_PARSED
+            1
+            for log in logs
+            if (getattr(log, "parse_status", "") or "").upper() == LOG_PARSE_PARSED
         )
         ready_logs_count = sum(
-            1 for log in logs
+            1
+            for log in logs
             if (getattr(log, "normalized_status", "") or "").upper() == LOG_NORMALIZATION_READY
         )
         converted_logs_count = sum(
-            1 for log in logs
+            1
+            for log in logs
             if (getattr(log, "normalized_status", "") or "").upper() == LOG_NORMALIZATION_CONVERTED
             or (getattr(log, "status", "") or "").upper() == LOG_CONVERTED
         )
         invalid_logs_count = sum(
-            1 for log in logs if (getattr(log, "parse_status", "") or "").upper() == LOG_PARSE_INVALID
+            1
+            for log in logs
+            if (getattr(log, "parse_status", "") or "").upper() == LOG_PARSE_INVALID
+            or (getattr(log, "status", "") or "").upper() == LOG_INVALID
         )
         duplicated_logs_count = sum(
-            1 for log in logs if (getattr(log, "parse_status", "") or "").upper() == LOG_PARSE_DUPLICATED
+            1
+            for log in logs
+            if (getattr(log, "parse_status", "") or "").upper() == LOG_PARSE_DUPLICATED
+            or (getattr(log, "status", "") or "").upper() == LOG_DUPLICATED
         )
         ignored_logs_count = sum(
-            1 for log in logs if (getattr(log, "parse_status", "") or "").upper() == LOG_PARSE_IGNORED
+            1
+            for log in logs
+            if (getattr(log, "parse_status", "") or "").upper() == LOG_PARSE_IGNORED
+            or (getattr(log, "status", "") or "").upper() == LOG_IGNORED
         )
 
         return OperationsSnapshotDTO(
@@ -494,10 +596,21 @@ class OperationsPanelService:
         )
 
     def _map_log_queue_row(self, log: Any) -> LogQueueRow:
-        status = str(getattr(log, "status", "") or LOG_NEW)
-        parse_status = str(getattr(log, "parse_status", "") or LOG_PARSE_NEW)
+        status = str(getattr(log, "status", "") or LOG_NEW).upper()
+        parse_status = str(getattr(log, "parse_status", "") or LOG_PARSE_NEW).upper()
         normalized_status = str(
             getattr(log, "normalized_status", "") or LOG_NORMALIZATION_PENDING
+        ).upper()
+
+        is_terminal = (
+            normalized_status == LOG_NORMALIZATION_CONVERTED
+            or parse_status in {LOG_PARSE_INVALID, LOG_PARSE_DUPLICATED, LOG_PARSE_IGNORED}
+            or status in {LOG_CONVERTED, LOG_INVALID, LOG_DUPLICATED, LOG_IGNORED}
+        )
+        is_actionable = not is_terminal and (
+            parse_status in {LOG_PARSE_NEW, LOG_PARSE_PARSED}
+            or normalized_status in {LOG_NORMALIZATION_PENDING, LOG_NORMALIZATION_READY}
+            or status == LOG_NEW
         )
 
         return LogQueueRow(
@@ -512,8 +625,20 @@ class OperationsPanelService:
             normalized_status=normalized_status,
             parse_error=_blank_to_none(getattr(log, "parse_error", None)),
             job_id=getattr(log, "job_id", None),
-            is_actionable=bool(getattr(log, "is_actionable", False)),
-            is_terminal=bool(getattr(log, "is_terminal", False)),
+            is_actionable=is_actionable,
+            is_terminal=is_terminal,
+        )
+
+    def _sort_available_jobs(self, rows: list[AvailableJobRow]) -> list[AvailableJobRow]:
+        return sorted(
+            rows,
+            key=lambda row: (
+                (row.fabric or "SEM TECIDO").strip().upper(),
+                (row.machine or "").strip().upper(),
+                -_dt_rank(row.end_time or row.start_time),
+                row.job_id,
+                row.document.lower(),
+            ),
         )
 
 
@@ -539,3 +664,12 @@ def _to_float_or_none(value: Any) -> float | None:
 def _contains_search(term: str, *values: object) -> bool:
     haystack = " ".join(str(value or "") for value in values).lower()
     return term in haystack
+
+
+def _dt_rank(value: datetime | None) -> float:
+    if value is None:
+        return -1.0
+    try:
+        return float(value.timestamp())
+    except Exception:
+        return -1.0

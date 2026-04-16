@@ -100,15 +100,6 @@ def _validate_identifier(name: str) -> str:
     return name
 
 
-def _norm_machine(value: str | None) -> str:
-    return (value or "").strip().upper()
-
-
-def _norm_fabric(value: str | None) -> str | None:
-    text = (value or "").strip().upper()
-    return text or None
-
-
 class ProductionRepository:
     def __init__(
         self,
@@ -353,14 +344,6 @@ class ProductionRepository:
                     "reviewed_at": "TEXT",
                     "reopened_at": "TEXT",
                 },
-            )
-
-            conn.execute(
-                """
-                UPDATE rolls
-                SET machine = COALESCE(machine, '')
-                WHERE machine IS NULL
-                """
             )
 
             conn.execute(
@@ -1329,7 +1312,7 @@ class ProductionRepository:
 
     def generate_roll_name(
         self,
-        machine: str | None = None,
+        machine: str,
         opened_at: datetime | None = None,
         conn: sqlite3.Connection | None = None,
     ) -> str:
@@ -1341,19 +1324,19 @@ class ProductionRepository:
             self.ensure_roll_tables(conn)
 
             dt = opened_at or datetime.now()
-            machine_code = _norm_machine(machine)
-            prefix_machine = machine_code if machine_code else "PENDENTE"
+            machine_code = machine.strip().upper()
             date_key = dt.strftime("%Y%m%d")
-            prefix = f"{prefix_machine}_{date_key}_"
+            prefix = f"{machine_code}_{date_key}_"
 
             rows = conn.execute(
                 """
                 SELECT roll_name
                 FROM rolls
-                WHERE roll_name LIKE ?
+                WHERE machine = ?
+                  AND roll_name LIKE ?
                 ORDER BY roll_name
                 """,
-                (f"{prefix}%",),
+                (machine_code, f"{prefix}%"),
             ).fetchall()
 
             max_seq = 0
@@ -1364,14 +1347,14 @@ class ProductionRepository:
                     max_seq = max(max_seq, int(suffix))
 
             next_seq = max_seq + 1
-            return f"{prefix_machine}_{date_key}_{next_seq:03d}"
+            return f"{machine_code}_{date_key}_{next_seq:03d}"
         finally:
             if owns_connection:
                 conn.close()
 
     def create_roll(
         self,
-        machine: str | None = None,
+        machine: str,
         fabric: str | None = None,
         note: str | None = None,
         roll_name: str | None = None,
@@ -1380,11 +1363,9 @@ class ProductionRepository:
             self.ensure_runtime_fields(conn)
             self.ensure_roll_tables(conn)
 
-            machine_code = _norm_machine(machine)
-            fabric_code = _norm_fabric(fabric)
-
+            machine_code = machine.strip().upper()
             final_roll_name = (roll_name.strip().upper() if roll_name else None) or self.generate_roll_name(
-                machine=machine_code or None,
+                machine=machine_code,
                 conn=conn,
             )
 
@@ -1402,7 +1383,7 @@ class ProductionRepository:
                     )
                     VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                     """,
-                    (final_roll_name, machine_code, fabric_code, ROLL_OPEN, note),
+                    (final_roll_name, machine_code, fabric, ROLL_OPEN, note),
                 )
                 conn.commit()
                 return int(cursor.lastrowid)
@@ -1541,104 +1522,283 @@ class ProductionRepository:
 
             return [self.row_to_roll_item(row) for row in rows]
 
-    def _resequence_roll_items(self, conn: sqlite3.Connection, roll_id: int) -> None:
-        rows = conn.execute(
-            """
-            SELECT id
-            FROM roll_items
-            WHERE roll_id = ?
-            ORDER BY sort_order, id
-            """,
-            (roll_id,),
-        ).fetchall()
-
-        for index, row in enumerate(rows, start=1):
-            conn.execute(
-                """
-                UPDATE roll_items
-                SET sort_order = ?
-                WHERE id = ?
-                """,
-                (index, int(row["id"])),
-            )
-
-    def _update_auto_roll_name_if_needed(
+    def add_job_to_roll(
         self,
-        conn: sqlite3.Connection,
         roll_id: int,
-        current_roll_name: str,
-        machine_code: str,
-    ) -> None:
-        if not machine_code:
-            return
+        job_row_id: int | None = None,
+        job_id: str | None = None,
+    ) -> int:
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            self.ensure_roll_tables(conn)
 
-        current_name = (current_roll_name or "").strip().upper()
-        if not current_name.startswith("PENDENTE_"):
-            return
+            roll_row = conn.execute(
+                "SELECT * FROM rolls WHERE id = ?",
+                (roll_id,),
+            ).fetchone()
+            if not roll_row:
+                raise ValueError(f"Rolo não encontrado: id={roll_id}")
 
-        new_name = self.generate_roll_name(machine=machine_code, conn=conn)
-        conn.execute(
-            """
-            UPDATE rolls
-            SET roll_name = ?,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-            """,
-            (new_name, roll_id),
-        )
+            roll = self.row_to_roll(roll_row)
+            if roll.status != ROLL_OPEN:
+                raise ValueError(f"O rolo {roll.roll_name} não está em aberto.")
 
-    def _sync_roll_identity_from_items(self, conn: sqlite3.Connection, roll_id: int) -> None:
-        rows = conn.execute(
-            """
-            SELECT machine, fabric
-            FROM roll_items
-            WHERE roll_id = ?
-            ORDER BY sort_order, id
-            """,
-            (roll_id,),
-        ).fetchall()
+            job = self._get_job_for_roll(conn, job_row_id=job_row_id, job_id=job_id)
+            if job.id is None:
+                raise ValueError("Job sem ID persistido.")
 
-        roll_row = conn.execute(
-            "SELECT roll_name FROM rolls WHERE id = ?",
-            (roll_id,),
-        ).fetchone()
+            existing_any = conn.execute(
+                """
+                SELECT ri.id, ri.roll_id, r.roll_name
+                FROM roll_items ri
+                JOIN rolls r ON r.id = ri.roll_id
+                WHERE ri.job_row_id = ?
+                """,
+                (int(job.id),),
+            ).fetchone()
 
-        if not roll_row:
-            raise ValueError(f"Rolo não encontrado: id={roll_id}")
+            if existing_any:
+                raise ValueError(
+                    f"Este job já pertence ao rolo {existing_any['roll_name']} (id={existing_any['roll_id']})."
+                )
 
-        if not rows:
+            if roll.machine.strip().upper() != (job.machine or "").strip().upper():
+                raise ValueError(
+                    f"Máquina incompatível. Rolo={roll.machine} | Job={job.machine}"
+                )
+
+            if roll.fabric and job.fabric:
+                if roll.fabric.strip().upper() != job.fabric.strip().upper():
+                    raise ValueError(
+                        f"Tecido incompatível. Rolo={roll.fabric} | Job={job.fabric}"
+                    )
+
+            next_sort = conn.execute(
+                "SELECT COALESCE(MAX(sort_order), 0) + 1 AS next_sort FROM roll_items WHERE roll_id = ?",
+                (roll_id,),
+            ).fetchone()["next_sort"]
+
+            decision = classify_job(job)
+            cursor = conn.execute(
+                """
+                INSERT INTO roll_items (
+                    roll_id,
+                    job_row_id,
+                    job_id,
+                    document,
+                    machine,
+                    fabric,
+                    sort_order,
+                    planned_length_m,
+                    effective_printed_length_m,
+                    consumed_length_m,
+                    gap_before_m,
+                    metric_category,
+                    review_status,
+                    snapshot_print_status,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                """,
+                (
+                    roll_id,
+                    int(job.id),
+                    job.job_id,
+                    job.document,
+                    job.machine,
+                    job.fabric,
+                    int(next_sort),
+                    float(job.planned_length_m),
+                    float(effective_printed_length_m(job)),
+                    float(job.consumed_length_m),
+                    float(job.gap_before_m),
+                    decision.category or "OK",
+                    job.review_status,
+                    job.print_status,
+                ),
+            )
+            conn.commit()
+            return int(cursor.lastrowid)
+
+    def remove_job_from_roll(
+        self,
+        roll_id: int,
+        job_row_id: int | None = None,
+        job_id: str | None = None,
+    ) -> int:
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            self.ensure_roll_tables(conn)
+
+            roll_row = conn.execute(
+                "SELECT * FROM rolls WHERE id = ?",
+                (roll_id,),
+            ).fetchone()
+            if not roll_row:
+                raise ValueError(f"Rolo não encontrado: id={roll_id}")
+
+            roll = self.row_to_roll(roll_row)
+            if roll.status != ROLL_OPEN:
+                raise ValueError(f"O rolo {roll.roll_name} não está em aberto.")
+
+            if job_row_id is None and job_id is None:
+                raise ValueError("Informe job_row_id ou job_id.")
+
+            if job_row_id is not None:
+                cursor = conn.execute(
+                    """
+                    DELETE FROM roll_items
+                    WHERE roll_id = ? AND job_row_id = ?
+                    """,
+                    (roll_id, job_row_id),
+                )
+            else:
+                cursor = conn.execute(
+                    """
+                    DELETE FROM roll_items
+                    WHERE roll_id = ? AND job_id = ?
+                    """,
+                    (roll_id, job_id),
+                )
+
+            conn.commit()
+            return int(cursor.rowcount)
+
+    def close_roll(self, roll_id: int, note: str | None = None) -> None:
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            self.ensure_roll_tables(conn)
+
+            roll_row = conn.execute(
+                "SELECT * FROM rolls WHERE id = ?",
+                (roll_id,),
+            ).fetchone()
+            if not roll_row:
+                raise ValueError(f"Rolo não encontrado: id={roll_id}")
+
+            existing_items = conn.execute(
+                "SELECT COUNT(*) AS n FROM roll_items WHERE roll_id = ?",
+                (roll_id,),
+            ).fetchone()["n"]
+            if int(existing_items) <= 0:
+                raise ValueError("Não é possível fechar um rolo vazio.")
+
+            current_note = roll_row["note"]
+            final_note = current_note
+            if note:
+                final_note = f"{current_note}\n{note}".strip() if current_note else note
+
             conn.execute(
                 """
                 UPDATE rolls
-                SET machine = '',
-                    fabric = NULL,
+                SET status = ?,
+                    note = ?,
+                    closed_at = CURRENT_TIMESTAMP,
                     updated_at = CURRENT_TIMESTAMP
                 WHERE id = ?
                 """,
-                (roll_id,),
+                (ROLL_CLOSED, final_note, roll_id),
             )
-            return
+            conn.commit()
 
-        machines = []
-        fabrics = []
+    def mark_roll_exported(self, roll_id: int) -> None:
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            self.ensure_roll_tables(conn)
+            conn.execute(
+                """
+                UPDATE rolls
+                SET status = ?,
+                    exported_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (ROLL_EXPORTED, roll_id),
+            )
+            conn.commit()
 
-        for row in rows:
-            machine_code = _norm_machine(row["machine"])
-            if machine_code:
-                machines.append(machine_code)
+    def mark_roll_reviewed(self, roll_id: int) -> None:
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            self.ensure_roll_tables(conn)
+            conn.execute(
+                """
+                UPDATE rolls
+                SET status = ?,
+                    reviewed_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (ROLL_REVIEWED, roll_id),
+            )
+            conn.commit()
 
-            fabric_code = _norm_fabric(row["fabric"])
-            if fabric_code:
-                fabrics.append(fabric_code)
+    def reopen_roll(self, roll_id: int, note: str | None = None) -> None:
+        with self.connect() as conn:
+            self.ensure_runtime_fields(conn)
+            self.ensure_roll_tables(conn)
 
-        first_machine = machines[0] if machines else ""
-        distinct_fabrics = sorted(set(fabrics))
+            row = conn.execute("SELECT note FROM rolls WHERE id = ?", (roll_id,)).fetchone()
+            if not row:
+                raise ValueError(f"Rolo não encontrado: id={roll_id}")
 
-        if not distinct_fabrics:
-            roll_fabric = None
-        elif len(distinct_fabrics) == 1:
-            roll_fabric = distinct_fabrics[0]
-        else:
-            roll_fabric = "MISTO"
+            current_note = row["note"] or ""
+            final_note = current_note
+            if note and note.strip():
+                stamp = f"[{_now_display()}] REOPEN: {note.strip()}"
+                final_note = f"{current_note}\n{stamp}".strip() if current_note else stamp
 
-        self._update_auto
+            conn.execute(
+                """
+                UPDATE rolls
+                SET status = ?,
+                    note = ?,
+                    reopened_at = CURRENT_TIMESTAMP,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (ROLL_REOPENED, final_note, roll_id),
+            )
+            conn.commit()
+
+    def get_roll_summary(self, roll_id: int) -> dict:
+        roll = self.get_roll(roll_id=roll_id)
+        if not roll:
+            raise ValueError(f"Rolo não encontrado: id={roll_id}")
+
+        items = self.list_roll_items(roll_id)
+
+        total_planned = sum(item.planned_length_m for item in items)
+        total_effective = sum(item.effective_printed_length_m for item in items)
+        total_consumed = sum(item.consumed_length_m for item in items)
+        total_gap = sum(item.gap_before_m for item in items)
+
+        metric_counts: dict[str, int] = {}
+        fabric_counts: dict[str, float] = {}
+
+        for item in items:
+            key = item.metric_category or "OK"
+            metric_counts[key] = metric_counts.get(key, 0) + 1
+
+            fab = (item.fabric or "SEM TECIDO").strip() or "SEM TECIDO"
+            fabric_counts[fab] = fabric_counts.get(fab, 0.0) + float(item.effective_printed_length_m)
+
+        efficiency = (total_effective / total_planned) if total_planned > 0 else None
+
+        return {
+            "roll": roll,
+            "items": items,
+            "jobs_count": len(items),
+            "total_planned_m": total_planned,
+            "total_effective_m": total_effective,
+            "total_consumed_m": total_consumed,
+            "total_gap_m": total_gap,
+            "efficiency_ratio": efficiency,
+            "metric_counts": metric_counts,
+            "fabric_totals": fabric_counts,
+        }
+
+
+__all__ = [
+    "ProductionRepository",
+]

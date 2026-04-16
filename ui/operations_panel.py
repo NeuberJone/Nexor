@@ -1,1644 +1,1351 @@
-# storage/repository.py
-from __future__ import annotations
-
+import os
 import re
-import sqlite3
+import json
+import math
+import tkinter as tk
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import List, Optional
+from tkinter import ttk, messagebox, filedialog
 
-from analytics.production_metrics import classify_job, effective_printed_length_m
-from core.models import (
-    Job,
-    Log,
-    ProductionJob,
-    REVIEW_PENDING,
-    ROLL_CLOSED,
-    ROLL_EXPORTED,
-    ROLL_OPEN,
-    ROLL_REOPENED,
-    ROLL_REVIEWED,
-    LOG_CONVERTED,
-    LOG_DUPLICATED,
-    LOG_IGNORED,
-    LOG_INVALID,
-    LOG_NEW,
-    LOG_PARSED,
-    LOG_NORMALIZATION_CONVERTED,
-    LOG_NORMALIZATION_PENDING,
-    LOG_NORMALIZATION_READY,
-    LOG_PARSE_DUPLICATED,
-    LOG_PARSE_IGNORED,
-    LOG_PARSE_INVALID,
-    LOG_PARSE_NEW,
-    LOG_PARSE_PARSED,
-    Roll,
-    RollItem,
-    resolve_log_status_parts,
-)
+APP_VERSION = "NEXOR-DEV"
+
+def _round_up_cm(value_m: float) -> float:
+    """
+    Arredonda para cima em centímetros (0.01 m).
+    Ex: 6.361 -> 6.37
+    """
+    return math.ceil(value_m * 100) / 100
+def fmt_m(value_m: float, suffix: bool = True) -> str:
+    rounded = _round_up_cm(float(value_m or 0.0))
+    return f"{rounded:.2f} m" if suffix else f"{rounded:.2f}"
 
 
-def _now_iso() -> str:
-    return datetime.now().isoformat(timespec="seconds")
+
+# ---- PDF (reportlab) ----
+try:
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfbase import pdfmetrics
+except Exception:
+    canvas = None
+    A4 = None
+    pdfmetrics = None
 
 
-def _now_display() -> str:
-    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+# ---- JPG (PyMuPDF) ----
+try:
+    import fitz  # PyMuPDF
+    _HAS_PYMUPDF = True
+except Exception:
+    fitz = None
+    _HAS_PYMUPDF = False
 
 
-def _parse_datetime(value: str | None) -> datetime | None:
-    if not value:
-        return None
+# ---- Drag & drop (tkinterdnd2) ----
+try:
+    from tkinterdnd2 import DND_FILES  # type: ignore
+    _HAS_DND = True
+except Exception:
+    DND_FILES = None
+    _HAS_DND = False
+
+# ---- JPG export (PyMuPDF + Pillow) ----
+try:
+    import fitz  # PyMuPDF
+    _HAS_PYMUPDF = True
+except Exception:
+    fitz = None
+    _HAS_PYMUPDF = False
+
+try:
+    from PIL import Image
+    _HAS_PIL = True
+except Exception:
+    Image = None
+    _HAS_PIL = False
+
+# --------------------------
+# Config / storage
+# --------------------------
+APP_DIR = Path(os.environ.get("APPDATA") or str(Path.home())) / "Nexor" / "PXPrintLogs"
+APP_DIR.mkdir(parents=True, exist_ok=True)
+CFG_PATH = APP_DIR / "config.json"
+
+DEFAULT_CFG = {
+    # "export_dir": r"C:\Registro",      # legado (não usar mais)
+
+    # JPG espelhado (tamanho final)
+    "mirror_jpg_width_mode": "17",     # "17" | "21" | "custom"
+    "mirror_jpg_width_cm_custom": 17.0,
+    "mirror_jpg_dpi": 300,             # usado para converter cm->px (qualidade)
+}
+
+
+def load_cfg() -> dict:
+    if CFG_PATH.exists():
+        try:
+            return {**DEFAULT_CFG, **json.loads(CFG_PATH.read_text(encoding="utf-8"))}
+        except Exception:
+            return dict(DEFAULT_CFG)
+    return dict(DEFAULT_CFG)
+
+
+def save_cfg(cfg: dict) -> None:
     try:
-        return datetime.fromisoformat(value)
-    except ValueError:
+        CFG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+# --------------------------
+# Domain models
+# --------------------------
+@dataclass
+class Job:
+    end_time: datetime
+    document: str
+    fabric: str
+    height_mm: float
+    vpos_mm: float
+    real_mm: float
+    src_file: str  # caminho completo (ajuda no dedupe)
+
+    @property
+    def real_m(self) -> float:
+        return self.real_mm / 1000.0
+
+
+@dataclass
+class Block:
+    fabric: str
+    machine: str
+    Jobs: List[Job]
+
+    @property
+    def total_m(self) -> float:
+        return sum(j.real_m for j in self.Jobs)
+
+    @property
+    def job_count(self) -> int:
+        return len(self.Jobs)
+
+    @property
+    def newest_end(self) -> datetime:
+        return max(j.end_time for j in self.Jobs)
+
+    @property
+    def oldest_end(self) -> datetime:
+        return min(j.end_time for j in self.Jobs)
+
+
+# --------------------------
+# Parsing helpers
+# --------------------------
+_RE_KV = re.compile(r"^\s*([A-Za-z0-9_]+)\s*=\s*(.*)\s*$")
+_RE_SECTION = re.compile(r"^\s*\[(.+?)\]\s*$")
+
+
+def _parse_datetime(s: str) -> Optional[datetime]:
+    s = (s or "").strip()
+    for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M"):
+        try:
+            return datetime.strptime(s, fmt)
+        except Exception:
+            pass
+    return None
+
+
+def _fabric_from_document(doc: str) -> str:
+    parts = [p.strip() for p in (doc or "").split(" - ")]
+    if len(parts) >= 2 and parts[1].strip():
+        return parts[1].strip().upper()
+    return "DESCONHECIDO"
+
+
+def parse_log_txt(path: str) -> Optional[Job]:
+    try:
+        txt = Path(path).read_text(encoding="utf-8", errors="ignore").splitlines()
+    except Exception:
         return None
 
+    section = None
+    general = {}
+    item1 = {}
 
-def _dt_to_iso(value: datetime | None) -> str | None:
-    if value is None:
+    for line in txt:
+        msec = _RE_SECTION.match(line)
+        if msec:
+            section = msec.group(1).strip()
+            continue
+        mkv = _RE_KV.match(line)
+        if not mkv:
+            continue
+        k, v = mkv.group(1).strip(), mkv.group(2).strip()
+        if section == "General":
+            general[k] = v
+        elif section == "1":
+            item1[k] = v
+
+    end_dt = _parse_datetime(general.get("EndTime", ""))
+    if not end_dt:
         return None
-    return value.isoformat(timespec="seconds")
+
+    document = general.get("Document") or item1.get("Name") or Path(path).stem
+
+    def _f(x: str) -> float:
+        x = (x or "").strip().replace(",", ".")
+        try:
+            return float(x)
+        except Exception:
+            return 0.0
+
+    height_mm = _f(item1.get("HeightMM", "0"))
+    vpos_mm = _f(item1.get("VPositionMM", "0"))
+
+    # Real é apenas o comprimento impresso (HeightMM), não soma deslocamento
+    real_mm = height_mm
+
+    fabric = _fabric_from_document(document)
+
+    return Job(
+        end_time=end_dt,
+        document=document,
+        fabric=fabric,
+        height_mm=height_mm,
+        vpos_mm=vpos_mm,
+        real_mm=real_mm,
+        src_file=str(path),  # caminho completo
+    )
 
 
-def _to_bool(value: object, default: bool = False) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return bool(value)
+def build_blocks(Jobs: List[Job], machine: str) -> List[Block]:
+    Jobs_sorted = sorted(Jobs, key=lambda j: j.end_time, reverse=True)
 
-    text = str(value).strip().lower()
-    if text in {"1", "true", "yes", "sim", "y"}:
-        return True
-    if text in {"0", "false", "no", "nao", "não", "n"}:
-        return False
-    return default
+    blocks: List[Block] = []
+    current_Jobs: List[Job] = []
+    current_fabric: Optional[str] = None
+
+    for j in Jobs_sorted:
+        if current_fabric is None:
+            current_fabric = j.fabric
+            current_Jobs = [j]
+            continue
+
+        if j.fabric == current_fabric:
+            current_Jobs.append(j)
+        else:
+            blocks.append(Block(fabric=current_fabric, machine=machine, Jobs=current_Jobs))
+            current_fabric = j.fabric
+            current_Jobs = [j]
+
+    if current_fabric is not None and current_Jobs:
+        blocks.append(Block(fabric=current_fabric, machine=machine, Jobs=current_Jobs))
+
+    return blocks
+
+# --------------------------
+# Output dirs (PXCore base)
+# --------------------------
+MODULE_NAME = "PXPrintLogs"
+
+def _nexor_base_dir() -> Path:
+    env = os.environ.get("NEXOR_BASE_DIR", "").strip()
+    base_dir = Path(env) if env else (Path.home() / "NexorData")
+    base_dir.mkdir(parents=True, exist_ok=True)
+    return base_dir
+
+def _ym(dt: datetime) -> tuple[str, str]:
+    return f"{dt.year:04d}", f"{dt.month:02d}"
+
+def _pdf_out_dir(dt: datetime) -> Path:
+    # SOMENTE PDFs
+    y, m = _ym(dt)
+    out = _nexor_base_dir() / "pdf" / "PXPrintLogs" / "rolls" / y / m
+    out.mkdir(parents=True, exist_ok=True)
+    return out
+
+def _print_out_dir(dt: datetime) -> Path:
+    # Operacional (JPG espelhado)
+    y, m = _ym(dt)
+    out = _nexor_base_dir() / "print" / MODULE_NAME / "jpg" / y / m
+    out.mkdir(parents=True, exist_ok=True)
+    return out
+
+def _temp_dir() -> Path:
+    out = _nexor_base_dir() / "temp" / MODULE_NAME
+    out.mkdir(parents=True, exist_ok=True)
+    return out
+
+def _versioned_path(path: Path) -> Path:
+    """Evita sobrescrever: se existir, cria _v2, _v3..."""
+    if not path.exists():
+        return path
+
+    stem = path.stem
+    m = re.search(r"_v(\d+)$", stem, flags=re.IGNORECASE)
+    base = stem[:m.start()] if m else stem
+
+    n = 2
+    while True:
+        cand = path.with_name(f"{base}_v{n}{path.suffix}")
+        if not cand.exists():
+            return cand
+        n += 1
+
+# --------------------------
+# JPG helpers
+# --------------------------
+def _cm_to_px(cm: float, dpi: int) -> int:
+    return max(1, int(round((cm / 2.54) * dpi)))
 
 
-def _default_db_path() -> Path:
-    root = Path(__file__).resolve().parent.parent
+def pdf_first_page_to_jpg_sized(pdf_path: str, jpg_path: str, target_width_cm: float, dpi: int = 300) -> None:
+    """
+    Converte a primeira página de um PDF para JPG com largura física desejada (em cm).
+    Mantém proporção automaticamente.
+    """
+    if not _HAS_PYMUPDF or fitz is None:
+        raise RuntimeError("PyMuPDF não instalado. Instale: pip install pymupdf")
 
-    candidates = [
-        root / "nexor.db",
-        root / "storage" / "nexor.db",
-        root / "data" / "nexor.db",
-        root / "database.db",
-        root / "storage" / "database.db",
-    ]
+    if target_width_cm <= 0:
+        raise ValueError("target_width_cm deve ser > 0")
 
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
+    width_px = _cm_to_px(float(target_width_cm), int(dpi))
 
-    return root / "nexor.db"
+    doc = fitz.open(pdf_path)
+    try:
+        page = doc.load_page(0)
+        page_width_pt = float(page.rect.width)  # pontos (1/72")
+        if page_width_pt <= 0:
+            raise RuntimeError("Página inválida para renderizar.")
 
+        # zoom: pixels = points * zoom
+        zoom = width_px / page_width_pt
+        mat = fitz.Matrix(zoom, zoom)
 
-def _validate_identifier(name: str) -> str:
-    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
-        raise ValueError(f"Invalid SQL identifier: {name!r}")
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        img.save(jpg_path, "JPEG", dpi=(dpi, dpi), quality=95)
+        #from PIL import Image
+    finally:
+        doc.close()
+
+# --------------------------
+# PDF helpers
+# --------------------------
+def _sanitize_filename(name: str) -> str:
+    bad = r'\/:*?"<>|'
+    for ch in bad:
+        name = name.replace(ch, "_")
+    name = re.sub(r"\s+", " ", name).strip()
     return name
 
 
-def _norm_machine(value: str | None) -> str:
-    return (value or "").strip().upper()
+def _pdf_need_new_page(y: float, min_y: float = 60) -> bool:
+    return y < min_y
 
 
-def _norm_fabric(value: str | None) -> str | None:
-    text = (value or "").strip().upper()
-    return text or None
+def _roll_total_m(blocks: List[Block]) -> float:
+    return sum(b.total_m for b in blocks)
 
 
-class ProductionRepository:
-    def __init__(
-        self,
-        db_path: str | Path | None = None,
-        table_name: str = "production_jobs",
-    ) -> None:
-        self.db_path = Path(db_path) if db_path is not None else _default_db_path()
-        self.table_name = _validate_identifier(table_name)
+def _pdf_draw_header(c, roll_name: str, machine: str, mode: str, page_w: float, top_y: float) -> float:
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(40, top_y, f"Ordem do Rolo - {roll_name}")
+    c.setFont("Helvetica", 10)
+    c.drawString(
+        40,
+        top_y - 18,
+        f"Máquina: {machine}    Modo: {'Completo' if mode=='full' else 'Resumido'}    Gerado: {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}",
+    )
+    c.line(40, top_y - 26, page_w - 40, top_y - 26)
+    return top_y - 40
 
-    def connect(self) -> sqlite3.Connection:
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        conn = sqlite3.connect(str(self.db_path))
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
-        return conn
 
-    def table_columns(self, conn: sqlite3.Connection, table_name: str | None = None) -> set[str]:
-        target = _validate_identifier(table_name or self.table_name)
-        cursor = conn.execute(f"PRAGMA table_info({target})")
-        return {str(row["name"]) for row in cursor.fetchall()}
+def _wrap_text(text: str, max_width: float, font_name: str, font_size: int) -> List[str]:
+    """
+    Wrap por largura real (stringWidth).
+    """
+    text = (text or "").strip()
+    if not text:
+        return [""]
 
-    def _pk_column(self, conn: sqlite3.Connection, table_name: str | None = None) -> str:
-        columns = self.table_columns(conn, table_name)
-        return "id" if "id" in columns else "rowid"
+    if pdfmetrics is None:
+        # fallback simples (evita crash)
+        return [text]
 
-    def _updated_at_trigger_name(self, table_name: str | None = None) -> str:
-        target = _validate_identifier(table_name or self.table_name)
-        return f"trg_{target}_updated_at"
+    words = text.split()
+    lines: List[str] = []
+    current = ""
 
-    def _ensure_updated_at_trigger(self, conn: sqlite3.Connection, table_name: str | None = None) -> None:
-        target = _validate_identifier(table_name or self.table_name)
-        columns = self.table_columns(conn, target)
-        trigger_name = self._updated_at_trigger_name(target)
+    for w in words:
+        test = w if not current else f"{current} {w}"
+        if pdfmetrics.stringWidth(test, font_name, font_size) <= max_width:
+            current = test
+        else:
+            if current:
+                lines.append(current)
 
-        conn.execute(f"DROP TRIGGER IF EXISTS {trigger_name}")
+            if pdfmetrics.stringWidth(w, font_name, font_size) <= max_width:
+                current = w
+            else:
+                # quebra por caracteres se uma palavra for maior que a coluna
+                chunk = ""
+                for ch in w:
+                    test2 = chunk + ch
+                    if pdfmetrics.stringWidth(test2, font_name, font_size) <= max_width:
+                        chunk = test2
+                    else:
+                        if chunk:
+                            lines.append(chunk)
+                        chunk = ch
+                current = chunk
 
-        if "updated_at" not in columns:
+    if current:
+        lines.append(current)
+
+    return lines
+
+
+def _draw_wrapped_cell(c, x: float, y_top: float, lines: List[str], font_name: str, font_size: int, line_h: float):
+    c.setFont(font_name, font_size)
+    yy = y_top
+    for ln in lines:
+        c.drawString(x, yy, ln)
+        yy -= line_h
+
+
+def _pdf_draw_summary_table(
+    c,
+    blocks: List[Block],
+    y: float,
+    page_w: float,
+    page_h: float,
+    roll_name: str,
+    machine: str,
+    mode: str,
+    mirrored: bool,
+) -> float:
+    """
+    Resumo:
+    - Total (m) centralizado, 2 casas, com "m"
+    - Qtd Pedidos centralizado
+    - Total geral no final
+    """
+    # Larguras FIXAS (A4 com margem 40)
+    # total útil = 595 - 80 = 515
+    w_num = 30
+    w_fab = 180
+    w_total = 90
+    w_Jobs = 70
+    w_last = 145  # soma = 515
+
+    def _reprint_summary_header(y0: float) -> float:
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(40, y0, "Resumo (ordem do rolo)")
+        y0 -= 16
+        c.setFont("Helvetica", 10)
+        c.line(40, y0, page_w - 40, y0)
+        y0 -= 18
+
+        # Cabeçalho colunas
+        c.setFont("Helvetica-Bold", 10)
+        x = 40
+        c.drawString(x, y0, "#")
+        x += w_num
+        c.drawString(x, y0, "Tecido")
+        x += w_fab
+
+        # Centraliza também o TÍTULO dessas colunas
+        c.drawCentredString(x + (w_total / 2), y0, "Total (m)")
+        x += w_total
+        c.drawCentredString(x + (w_Jobs / 2), y0, "Qtd Pedidos")
+        x += w_Jobs
+
+        c.drawString(x, y0, "Último fim")
+        y0 -= 14
+        c.setFont("Helvetica", 10)
+        return y0
+
+    y = _reprint_summary_header(y)
+
+    for i, b in enumerate(blocks, start=1):
+        if _pdf_need_new_page(y, min_y=85):
+            if mirrored:
+                c.restoreState()
+            c.showPage()
+            if mirrored:
+                c.saveState()
+                c.transform(-1, 0, 0, 1, page_w, 0)
+
+            y = page_h - 40
+            y = _pdf_draw_header(c, roll_name, machine, mode, page_w, y)
+            y = _reprint_summary_header(y)
+
+        x = 40
+        c.drawString(x, y, str(i))
+        x += w_num
+        c.drawString(x, y, b.fabric)
+        x += w_fab
+
+        # Total (coluna Total)
+        c.drawCentredString(x + (w_total / 2), y, f"{_round_up_cm(b.total_m):.2f} m")
+        x += w_total
+
+        # Qtd Pedidos (coluna Qtd)
+        c.drawCentredString(x + (w_Jobs / 2), y, str(b.job_count))
+        x += w_Jobs
+
+        # Último fim (coluna Último fim)
+        c.drawString(x, y, b.newest_end.strftime("%d/%m/%Y %H:%M:%S"))
+        y -= 14
+
+    # Total geral
+    if _pdf_need_new_page(y, min_y=85):
+        if mirrored:
+            c.restoreState()
+        c.showPage()
+        if mirrored:
+            c.saveState()
+            c.transform(-1, 0, 0, 1, page_w, 0)
+
+        y = page_h - 40
+        y = _pdf_draw_header(c, roll_name, machine, mode, page_w, y)
+
+    y -= 6
+    c.setLineWidth(1)
+    c.line(40, y, page_w - 40, y)
+    y -= 18
+
+    total_roll = _roll_total_m(blocks)
+    c.setFont("Helvetica-Bold", 11)
+    c.drawString(40, y, "Total geral do rolo:")
+    c.drawRightString(page_w - 40, y, f"{_round_up_cm(total_roll):.2f} m")
+    c.setFont("Helvetica", 10)
+    y -= 18
+
+    return y
+
+
+def export_pdf(
+    out_path: str,
+    blocks: List[Block],
+    roll_name: str,
+    machine: str,
+    mode: str = "full",
+    mirrored: bool = False,
+) -> None:
+    if canvas is None or A4 is None:
+        raise RuntimeError("reportlab não está instalado. Instale: pip install reportlab")
+
+    page_w, page_h = A4
+    c = canvas.Canvas(out_path, pagesize=A4)
+
+    def _begin_page():
+        if mirrored:
+            c.saveState()
+            c.transform(-1, 0, 0, 1, page_w, 0)
+
+    def _end_page():
+        if mirrored:
+            c.restoreState()
+        c.showPage()
+
+    y = page_h - 40
+    _begin_page()
+    y = _pdf_draw_header(c, roll_name, machine, mode, page_w, y)
+
+    # --------------------
+    # RESUMIDO
+    # --------------------
+    if mode == "summary":
+        _pdf_draw_summary_table(c, blocks, y, page_w, page_h, roll_name, machine, mode, mirrored)
+        _end_page()
+        c.save()
+        return
+
+    # --------------------
+    # COMPLETO
+    # --------------------
+
+    # Larguras FIXAS (A4 com margem 40) => 515 úteis
+    w_end = 120
+    w_doc = 260
+    w_fab = 95
+    w_size = 40  # soma = 515
+
+    font = "Helvetica"
+    font_bold = "Helvetica-Bold"
+    fs_head = 10
+    fs_row = 10
+    line_h = 12
+
+    def _reprint_Jobs_header(y0: float) -> float:
+        c.setFont("Helvetica-Bold", 12)
+        c.drawString(40, y0, "Pedidos (último impresso primeiro)")
+        y0 -= 16
+        c.setFont("Helvetica", 10)
+        c.line(40, y0, page_w - 40, y0)
+        y0 -= 18
+
+        c.setFont(font_bold, fs_head)
+        xh = 40
+        c.drawString(xh, y0, "EndTime")
+        xh += w_end
+        c.drawString(xh, y0, "Arquivo")
+        xh += w_doc
+        c.drawString(xh, y0, "Tecido")
+        xh += w_fab
+        c.drawString(xh, y0, "Tamanho")
+        y0 -= 14
+        c.setFont(font, fs_row)
+        return y0
+
+    # imprime cabeçalho das colunas na primeira página
+    y = _reprint_Jobs_header(y)
+
+    for bi, b in enumerate(blocks):
+        # separador entre blocos (mudou tecido)
+        if bi > 0:
+            if _pdf_need_new_page(y, min_y=95):
+                _end_page()
+                _begin_page()
+                y = page_h - 40
+                y = _pdf_draw_header(c, roll_name, machine, mode, page_w, y)
+                y = _reprint_Jobs_header(y)
+
+            c.setLineWidth(1)
+            c.line(40, y + 6, page_w - 40, y + 6)
+            y -= 8
+
+        # Pedidos do bloco (mais recente primeiro)
+        for j in sorted(b.Jobs, key=lambda jj: jj.end_time, reverse=True):
+            end_txt = j.end_time.strftime("%d/%m/%Y %H:%M:%S")
+            doc_txt = j.document  # COMPLETO (SEM "...")
+            fab_txt = j.fabric    # COMPLETO (SEM "...")
+            size_txt = f"{_round_up_cm(j.real_m):.2f} m"
+
+            doc_lines = _wrap_text(doc_txt, w_doc - 6, font, fs_row)
+            fab_lines = _wrap_text(fab_txt, w_fab - 6, font, fs_row)
+
+            row_lines = max(len(doc_lines), len(fab_lines), 1)
+            row_h = row_lines * line_h
+
+            if _pdf_need_new_page(y - row_h, min_y=95):
+                _end_page()
+                _begin_page()
+                y = page_h - 40
+                y = _pdf_draw_header(c, roll_name, machine, mode, page_w, y)
+                y = _reprint_Jobs_header(y)
+
+            x0 = 40
+            c.setFont(font, fs_row)
+
+            # EndTime (topo)
+            c.drawString(x0, y, end_txt)
+
+            # Arquivo com wrap
+            _draw_wrapped_cell(c, x0 + w_end, y, doc_lines, font, fs_row, line_h)
+
+            # Tecido com wrap
+            _draw_wrapped_cell(c, x0 + w_end + w_doc, y, fab_lines, font, fs_row, line_h)
+
+            # Tamanho (direita)
+            c.drawRightString(x0 + w_end + w_doc + w_fab + w_size - 2, y, size_txt)
+
+            y -= row_h
+
+    # separação + resumo
+    y -= 6
+    if _pdf_need_new_page(y, min_y=120):
+        _end_page()
+        _begin_page()
+        y = page_h - 40
+        y = _pdf_draw_header(c, roll_name, machine, mode, page_w, y)
+
+    c.setLineWidth(1.5)
+    c.line(40, y, page_w - 40, y)
+    y -= 22
+
+    _pdf_draw_summary_table(c, blocks, y, page_w, page_h, roll_name, machine, mode, mirrored)
+
+    _end_page()
+    c.save()
+
+def pdf_first_page_to_jpg_scaled(
+    pdf_path: str,
+    jpg_path: str,
+    *,
+    target_width_cm: float,
+    dpi: int = 300,
+    quality: int = 95,
+) -> None:
+    """
+    Renderiza a 1ª página do PDF em JPG com LARGURA física alvo (cm).
+    - Gera pixels suficientes para bater a largura em cm no DPI informado
+    - Salva o JPG com metadata dpi=(dpi,dpi) pra impressão sair no tamanho certo
+    """
+    if not _HAS_PYMUPDF:
+        raise RuntimeError("PyMuPDF não instalado. Instale: pip install pymupdf")
+    if not _HAS_PIL:
+        raise RuntimeError("Pillow não instalado. Instale: pip install pillow")
+
+    # largura em pixels que corresponde a target_width_cm no dpi desejado
+    width_in = float(target_width_cm) / 2.54
+    target_width_px = int(round(width_in * dpi))
+
+    doc = fitz.open(pdf_path)
+    try:
+        page = doc.load_page(0)
+
+        # page.rect.width está em pontos (pt). 1 pt = 1/72 inch.
+        page_width_pt = float(page.rect.width)
+
+        # PyMuPDF: pixels = pt * zoom  (onde zoom= dpi/72 se for 1:1 no dpi)
+        # Aqui a gente força a largura final: zoom = target_px / page_width_pt
+        zoom = target_width_px / page_width_pt
+        mat = fitz.Matrix(zoom, zoom)
+
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+
+        img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+        img.save(jpg_path, "JPEG", dpi=(dpi, dpi), quality=int(quality))
+    finally:
+        doc.close()
+
+# --------------------------
+# UI
+# --------------------------
+class OperationsPanel(ttk.Frame):
+    def __init__(self, parent, service=None):
+        super().__init__(parent)
+        self.service = service
+
+        self.mcfg = load_cfg()
+        self.machine: Optional[str] = None
+        self.Jobs: List[Job] = []
+        self.blocks: List[Block] = []
+
+        top = ttk.Frame(self)
+        top.pack(fill="x", padx=10, pady=10)
+
+        ttk.Label(top, text="Nome do rolo").grid(row=0, column=0, sticky="w")
+        self.var_roll = tk.StringVar(value="")
+        self.ent_roll = ttk.Entry(top, textvariable=self.var_roll, width=28)
+        self.ent_roll.grid(row=0, column=1, padx=(6, 6), sticky="w")
+
+        ttk.Button(top, text="Atualizar nome", command=self.on_refresh_roll_name)\
+            .grid(row=0, column=2, padx=(0, 12), sticky="w")
+
+        ttk.Label(top, text="Pasta").grid(row=1, column=0, sticky="w", pady=(6, 0))
+        self.var_export_dir = tk.StringVar(value=str(_pdf_out_dir(datetime.now())))
+        self.lbl_export_dir = ttk.Label(top, textvariable=self.var_export_dir)
+        self.lbl_export_dir.grid(row=1, column=1, columnspan=5, sticky="w", padx=(6, 0), pady=(6, 0))
+
+        ttk.Button(top, text="Abrir pastas", command=self.on_open_folders_menu)\
+            .grid(row=1, column=6, sticky="w", pady=(6, 0))
+
+        self.lbl_machine = ttk.Label(top, text="Máquina do lote: (não definida)")
+        self.lbl_machine.grid(row=2, column=0, columnspan=4, sticky="w", pady=(6, 0))
+
+        # ---- JPG espelhado: tamanho ----
+        ttk.Label(top, text="JPG espelhado").grid(row=3, column=0, sticky="w", pady=(6, 0))
+
+        self.var_jpg_mode = tk.StringVar(value=self.mcfg.get("mirror_jpg_width_mode", "17"))
+        self.var_jpg_custom = tk.StringVar(value=str(self.mcfg.get("mirror_jpg_width_cm_custom", 17.0)))
+
+        ttk.Radiobutton(top, text="17 cm", value="17", variable=self.var_jpg_mode)\
+            .grid(row=3, column=1, padx=(6, 0), sticky="w", pady=(6, 0))
+        ttk.Radiobutton(top, text="21 cm", value="21", variable=self.var_jpg_mode)\
+            .grid(row=3, column=2, padx=(6, 0), sticky="w", pady=(6, 0))
+        ttk.Radiobutton(top, text="Personalizado", value="custom", variable=self.var_jpg_mode)\
+            .grid(row=3, column=3, padx=(6, 0), sticky="w", pady=(6, 0))
+
+        self.ent_jpg_custom = ttk.Entry(top, textvariable=self.var_jpg_custom, width=6)
+        self.ent_jpg_custom.grid(row=3, column=4, padx=(6, 0), sticky="w", pady=(6, 0))
+        ttk.Label(top, text="cm").grid(row=3, column=5, padx=(4, 0), sticky="w", pady=(6, 0))
+
+        ttk.Button(top, text="Definir JPG como padrão", command=self.on_set_default_jpg)\
+            .grid(row=3, column=6, padx=(12, 0), sticky="w", pady=(6, 0))
+
+        def _update_custom_state(*_):
+            self.ent_jpg_custom.configure(state=("normal" if self.var_jpg_mode.get() == "custom" else "disabled"))
+
+        _update_custom_state()
+        self.var_jpg_mode.trace_add("write", _update_custom_state)
+
+        btns = ttk.Frame(top)
+        btns.grid(row=2, column=4, columnspan=3, sticky="e", pady=(6, 0))
+
+        # Linha 1: ações
+        row_actions = ttk.Frame(btns)
+        row_actions.pack(anchor="e", pady=(0, 4))
+
+        ttk.Button(row_actions, text="Importar logs", command=self.on_import_files).pack(side="left", padx=4)
+        ttk.Button(row_actions, text="Importar pasta", command=self.on_import_folder).pack(side="left", padx=4)
+        ttk.Button(row_actions, text="Limpar", command=self.on_clear).pack(side="left", padx=4)
+
+        # Linha 2: exportação
+        row_export = ttk.Frame(btns)
+        row_export.pack(anchor="e")
+
+        ttk.Button(row_export, text="Exportar PDF", command=lambda: self.on_export(which="normal")).pack(side="left", padx=4)
+        ttk.Button(row_export, text="Exportar JPG Espelhado", command=lambda: self.on_export(which="mirror")).pack(side="left", padx=4)
+        ttk.Button(row_export, text="Exportar Ambos", command=lambda: self.on_export(which="both")).pack(side="left", padx=4)
+
+        drop_frame = ttk.LabelFrame(self, text="Arraste e solte logs .txt aqui")
+        drop_frame.pack(fill="x", padx=10, pady=(0, 10))
+
+        self.drop_label = ttk.Label(drop_frame, text="Solte arquivos .txt (apenas) para importar")
+        self.drop_label.pack(fill="x", padx=10, pady=12)
+
+        if _HAS_DND:
+            try:
+                self.drop_label.drop_target_register(DND_FILES)  # type: ignore
+                self.drop_label.dnd_bind("<<Drop>>", self.on_drop_files)  # type: ignore
+            except Exception:
+                pass
+        else:
+            self.drop_label.configure(text="Drag & Drop indisponível (tkinterdnd2 não carregou). Use o botão Importar.")
+
+        details = ttk.LabelFrame(self, text="Detalhes do bloco selecionado")
+        details.pack(fill="both", expand=False, padx=10, pady=(0, 10))
+
+        self.var_detail_title = tk.StringVar(value="Selecione um tecido na lista abaixo...")
+        ttk.Label(details, textvariable=self.var_detail_title).pack(anchor="w", padx=10, pady=(8, 6))
+
+        self.tree_Jobs = ttk.Treeview(details, columns=("end", "doc", "h", "v", "real_m"), show="headings", height=6)
+        for col, txt, w in [
+            ("end", "EndTime", 140),
+            ("doc", "Documento", 420),
+            ("h", "HeightMM", 90),
+            ("v", "VPosMM", 90),
+            ("real_m", "Real (m)", 90),
+        ]:
+            self.tree_Jobs.heading(col, text=txt)
+            self.tree_Jobs.column(col, width=w, anchor="w")
+        sbj = ttk.Scrollbar(details, orient="vertical", command=self.tree_Jobs.yview)
+        self.tree_Jobs.configure(yscrollcommand=sbj.set)
+        self.tree_Jobs.pack(side="left", fill="both", expand=True, padx=(10, 0), pady=(0, 10))
+        sbj.pack(side="right", fill="y", padx=(0, 10), pady=(0, 10))
+
+        blocks_box = ttk.LabelFrame(self, text="Ordem do rolo (último impresso primeiro)")
+        blocks_box.pack(fill="both", expand=True, padx=10, pady=(0, 10))
+
+        self.tree_blocks = ttk.Treeview(blocks_box, columns=("#", "fabric", "total_m", "Jobs", "last"), show="headings", height=12)
+        for col, txt, w, anchor in [
+            ("#", "#", 40, "w"),
+            ("fabric", "Tecido", 180, "w"),
+            ("total_m", "Total (m)", 110, "e"),
+            ("Jobs", "Qtd Pedidos", 90, "e"),
+            ("last", "Último EndTime", 160, "w"),
+        ]:
+            self.tree_blocks.heading(col, text=txt)
+            self.tree_blocks.column(col, width=w, anchor=anchor)
+        sbb = ttk.Scrollbar(blocks_box, orient="vertical", command=self.tree_blocks.yview)
+        self.tree_blocks.configure(yscrollcommand=sbb.set)
+        self.tree_blocks.pack(side="left", fill="both", expand=True)
+        sbb.pack(side="right", fill="y")
+
+        self.tree_blocks.bind("<<TreeviewSelect>>", self.on_select_block)
+
+        self.status = ttk.Label(self, text="Pronto.")
+        self.status.pack(fill="x", padx=10, pady=(0, 10))
+
+        self._ensure_export_dir()
+
+    # --------------------------
+    # Config helpers
+    # --------------------------
+    def _ensure_export_dir(self):
+    # Exibe a pasta de PDFs (comprovantes) no UI
+        self.var_export_dir.set(str(_pdf_out_dir(datetime.now())))
+
+    def on_open_folders_menu(self):
+        """Abre um menu simples para escolher PDF/JPG."""
+        try:
+            menu = tk.Menu(self, tearoff=0)
+            menu.add_command(label="Abrir pasta PDF (comprovantes)", command=self.open_pdf_folder)
+            menu.add_command(label="Abrir pasta JPG (operação)", command=self.open_jpg_folder)
+
+            # posiciona o menu perto do mouse
+            x = self.winfo_pointerx()
+            y = self.winfo_pointery()
+            menu.tk_popup(x, y)
+        finally:
+            try:
+                menu.grab_release()
+            except Exception:
+                pass
+
+    def open_pdf_folder(self):
+        try:
+            folder = _pdf_out_dir(datetime.now())
+            os.startfile(str(folder))
+        except Exception:
+            messagebox.showerror("Erro", "Não foi possível abrir a pasta de PDFs.")
+
+    def open_jpg_folder(self):
+        try:
+            folder = _print_out_dir(datetime.now())
+            os.startfile(str(folder))
+        except Exception:
+            messagebox.showerror("Erro", "Não foi possível abrir a pasta de JPGs.")
+
+    def on_change_export_dir(self):
+        try:
+            folder = Path(self.var_export_dir.get()).resolve()
+            os.startfile(str(folder))
+        except Exception:
+            messagebox.showerror("Erro", "Não foi possível abrir a pasta de PDFs.")
+
+    def _get_mirror_target_cm(self) -> float:
+        mode = (self.var_jpg_mode.get() or "").strip()
+        if mode in ("17", "21"):
+            return float(mode)
+
+        # custom
+        s = (self.var_jpg_custom.get() or "").replace(",", ".").strip()
+        try:
+            v = float(s)
+        except Exception:
+            raise ValueError("Largura personalizada inválida.")
+
+        # limites anti-erro
+        if v < 8 or v > 40:
+            raise ValueError("Use entre 8 cm e 40 cm.")
+        return v
+
+    def on_set_default_jpg(self):
+        try:
+            cm = self._get_mirror_target_cm()
+        except Exception as e:
+            messagebox.showerror("JPG", str(e))
             return
 
-        conn.execute(
-            f"""
-            CREATE TRIGGER IF NOT EXISTS {trigger_name}
-            AFTER UPDATE ON {target}
-            FOR EACH ROW
-            WHEN NEW.updated_at = OLD.updated_at
-            BEGIN
-                UPDATE {target}
-                SET updated_at = CURRENT_TIMESTAMP
-                WHERE rowid = OLD.rowid;
-            END;
-            """
+        self.mcfg["mirror_jpg_width_mode"] = self.var_jpg_mode.get()
+        self.mcfg["mirror_jpg_width_cm_custom"] = float(cm)
+        save_cfg(self.mcfg)
+        messagebox.showinfo("JPG", f"Padrão salvo: {cm:.1f} cm")
+
+    # --------------------------
+    # Machine / naming
+    # --------------------------
+    def ask_machine(self) -> Optional[str]:
+        win = tk.Toplevel(self)
+        win.title("Selecionar máquina")
+        win.resizable(False, False)
+        win.transient(self.winfo_toplevel())
+        win.grab_set()
+
+        ttk.Label(win, text="Esses logs são de qual máquina?").pack(padx=12, pady=(12, 6), anchor="w")
+
+        var = tk.StringVar(value="M1")
+        frm = ttk.Frame(win)
+        frm.pack(padx=12, pady=6, anchor="w")
+        for m in ("M1", "M2"):
+            ttk.Radiobutton(frm, text=m, value=m, variable=var).pack(anchor="w")
+
+        out = {"val": None}
+
+        def ok():
+            out["val"] = var.get()
+            win.destroy()
+
+        def cancel():
+            out["val"] = None
+            win.destroy()
+
+        btn = ttk.Frame(win)
+        btn.pack(padx=12, pady=(6, 12), fill="x")
+        ttk.Button(btn, text="OK", command=ok).pack(side="right", padx=4)
+        ttk.Button(btn, text="Cancelar", command=cancel).pack(side="right", padx=4)
+
+        win.wait_window()
+        return out["val"]
+
+    def _auto_roll_name(self) -> str:
+        m = self.machine or "M?"
+        now = datetime.now()
+        return f"{m}_{now.strftime('%d-%m-%Y')}_{now.strftime('%H%M%S')}"
+
+    def on_refresh_roll_name(self):
+        if not self.machine:
+            messagebox.showwarning("Sem máquina", "Importe logs primeiro para definir a máquina.")
+            return
+        self.var_roll.set(self._auto_roll_name())
+
+    def _get_roll_name(self) -> str:
+        name = self.var_roll.get().strip()
+        if not name:
+            name = self._auto_roll_name()
+            self.var_roll.set(name)
+        return _sanitize_filename(name)
+
+    # --------------------------
+    # Drag & drop
+    # --------------------------
+    def on_drop_files(self, event):
+        raw = getattr(event, "data", "") or ""
+        files = self._split_dnd_files(raw)
+        self._import_paths(files)
+
+    def _split_dnd_files(self, data: str) -> List[str]:
+        out = []
+        buff = ""
+        in_brace = False
+        for ch in data:
+            if ch == "{":
+                in_brace = True
+                buff = ""
+            elif ch == "}":
+                in_brace = False
+                if buff:
+                    out.append(buff)
+                buff = ""
+            elif ch == " " and not in_brace:
+                if buff:
+                    out.append(buff)
+                    buff = ""
+            else:
+                buff += ch
+        if buff.strip():
+            out.append(buff.strip())
+        return [p.strip() for p in out if p.strip()]
+
+    # --------------------------
+    # Import
+    # --------------------------
+    def on_import_files(self):
+        paths = filedialog.askopenfilenames(
+            title="Selecionar logs .txt",
+            filetypes=[("Logs TXT", "*.txt")],
         )
-
-    def _ensure_table_columns(
-        self,
-        conn: sqlite3.Connection,
-        table_name: str,
-        desired_columns: dict[str, str],
-    ) -> None:
-        target = _validate_identifier(table_name)
-        existing = self.table_columns(conn, target)
-
-        for column_name, column_type in desired_columns.items():
-            if column_name in existing:
-                continue
-            conn.execute(f"ALTER TABLE {target} ADD COLUMN {column_name} {column_type}")
-
-    # ------------------------------------------------------------------
-    # Schema / runtime compatibility
-    # ------------------------------------------------------------------
-
-    def ensure_log_table(self, conn: sqlite3.Connection | None = None) -> None:
-        owns_connection = conn is None
-        conn = conn or self.connect()
-
-        try:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS logs (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    source_path TEXT,
-                    source_name TEXT,
-                    fingerprint TEXT,
-                    machine_code_raw TEXT,
-                    captured_at TEXT,
-                    raw_payload TEXT,
-                    status TEXT NOT NULL DEFAULT 'NEW',
-                    parse_status TEXT NOT NULL DEFAULT 'NEW',
-                    normalized_status TEXT NOT NULL DEFAULT 'PENDING',
-                    parse_error TEXT,
-                    imported_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    job_id INTEGER,
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-                )
-                """
-            )
-
-            self._ensure_table_columns(
-                conn,
-                "logs",
-                {
-                    "source_path": "TEXT",
-                    "source_name": "TEXT",
-                    "fingerprint": "TEXT",
-                    "machine_code_raw": "TEXT",
-                    "captured_at": "TEXT",
-                    "raw_payload": "TEXT",
-                    "status": "TEXT",
-                    "parse_status": "TEXT",
-                    "normalized_status": "TEXT",
-                    "parse_error": "TEXT",
-                    "imported_at": "TEXT",
-                    "job_id": "INTEGER",
-                    "created_at": "TEXT",
-                    "updated_at": "TEXT",
-                },
-            )
-
-            conn.execute(
-                """
-                UPDATE logs
-                SET parse_status = CASE
-                    WHEN UPPER(COALESCE(status, '')) = 'PARSED' THEN 'PARSED'
-                    WHEN UPPER(COALESCE(status, '')) = 'INVALID' THEN 'INVALID'
-                    WHEN UPPER(COALESCE(status, '')) = 'DUPLICATED' THEN 'DUPLICATED'
-                    WHEN UPPER(COALESCE(status, '')) = 'IGNORED' THEN 'IGNORED'
-                    WHEN UPPER(COALESCE(status, '')) = 'CONVERTED' THEN 'PARSED'
-                    ELSE 'NEW'
-                END
-                WHERE parse_status IS NULL OR TRIM(parse_status) = ''
-                """
-            )
-
-            conn.execute(
-                """
-                UPDATE logs
-                SET normalized_status = CASE
-                    WHEN UPPER(COALESCE(status, '')) = 'CONVERTED' THEN 'CONVERTED'
-                    WHEN UPPER(COALESCE(parse_status, '')) = 'PARSED' THEN 'READY'
-                    ELSE 'PENDING'
-                END
-                WHERE normalized_status IS NULL OR TRIM(normalized_status) = ''
-                """
-            )
-
-            conn.execute(
-                """
-                UPDATE logs
-                SET status = CASE
-                    WHEN UPPER(COALESCE(normalized_status, '')) = 'CONVERTED' THEN 'CONVERTED'
-                    WHEN UPPER(COALESCE(parse_status, '')) = 'INVALID' THEN 'INVALID'
-                    WHEN UPPER(COALESCE(parse_status, '')) = 'DUPLICATED' THEN 'DUPLICATED'
-                    WHEN UPPER(COALESCE(parse_status, '')) = 'IGNORED' THEN 'IGNORED'
-                    WHEN UPPER(COALESCE(parse_status, '')) = 'PARSED' THEN 'PARSED'
-                    ELSE 'NEW'
-                END
-                WHERE status IS NULL OR TRIM(status) = ''
-                """
-            )
-
-            conn.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS idx_logs_fingerprint ON logs (fingerprint)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_logs_status ON logs (status)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_logs_parse_status ON logs (parse_status)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_logs_normalized_status ON logs (normalized_status)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_logs_captured_at ON logs (captured_at)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_logs_source_path ON logs (source_path)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_logs_machine_code_raw ON logs (machine_code_raw)"
-            )
-
-            conn.execute(
-                """
-                UPDATE logs
-                SET created_at = COALESCE(created_at, CURRENT_TIMESTAMP)
-                WHERE created_at IS NULL
-                """
-            )
-            conn.execute(
-                """
-                UPDATE logs
-                SET updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP)
-                WHERE updated_at IS NULL
-                """
-            )
-
-            self._ensure_updated_at_trigger(conn, "logs")
-            conn.commit()
-        finally:
-            if owns_connection:
-                conn.close()
-
-    def ensure_roll_tables(self, conn: sqlite3.Connection | None = None) -> None:
-        owns_connection = conn is None
-        conn = conn or self.connect()
-
-        try:
-            conn.execute(
-                """
-                CREATE TABLE IF NOT EXISTS rolls (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    roll_name TEXT NOT NULL UNIQUE,
-                    machine TEXT NOT NULL,
-                    fabric TEXT,
-                    status TEXT NOT NULL DEFAULT 'OPEN',
-                    note TEXT,
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    closed_at TEXT,
-                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    exported_at TEXT,
-                    reviewed_at TEXT,
-                    reopened_at TEXT
-                )
-                """
-            )
-
-            self._ensure_table_columns(
-                conn,
-                "rolls",
-                {
-                    "roll_name": "TEXT",
-                    "machine": "TEXT",
-                    "fabric": "TEXT",
-                    "status": "TEXT",
-                    "note": "TEXT",
-                    "created_at": "TEXT",
-                    "closed_at": "TEXT",
-                    "updated_at": "TEXT",
-                    "exported_at": "TEXT",
-                    "reviewed_at": "TEXT",
-                    "reopened_at": "TEXT",
-                },
-            )
-
-            conn.execute(
-                """
-                UPDATE rolls
-                SET machine = COALESCE(machine, '')
-                WHERE machine IS NULL
-                """
-            )
-
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_rolls_status ON rolls (status)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_rolls_machine ON rolls (machine)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_rolls_fabric ON rolls (fabric)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_rolls_created_at ON rolls (created_at)"
-            )
-
-            self._ensure_updated_at_trigger(conn, "rolls")
-
-            conn.execute(
-                f"""
-                CREATE TABLE IF NOT EXISTS roll_items (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    roll_id INTEGER NOT NULL,
-                    job_row_id INTEGER NOT NULL,
-                    job_id TEXT NOT NULL,
-                    document TEXT NOT NULL,
-                    machine TEXT NOT NULL,
-                    fabric TEXT,
-                    sort_order INTEGER NOT NULL DEFAULT 0,
-                    planned_length_m REAL NOT NULL DEFAULT 0,
-                    effective_printed_length_m REAL NOT NULL DEFAULT 0,
-                    consumed_length_m REAL NOT NULL DEFAULT 0,
-                    gap_before_m REAL NOT NULL DEFAULT 0,
-                    metric_category TEXT,
-                    review_status TEXT,
-                    snapshot_print_status TEXT,
-                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (roll_id) REFERENCES rolls(id) ON DELETE CASCADE,
-                    FOREIGN KEY (job_row_id) REFERENCES {self.table_name}(id) ON DELETE RESTRICT,
-                    UNIQUE(roll_id, job_row_id),
-                    UNIQUE(job_row_id)
-                )
-                """
-            )
-
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_roll_items_roll_id ON roll_items (roll_id)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_roll_items_job_row_id ON roll_items (job_row_id)"
-            )
-            conn.execute(
-                "CREATE INDEX IF NOT EXISTS idx_roll_items_sort_order ON roll_items (roll_id, sort_order)"
-            )
-            conn.commit()
-        finally:
-            if owns_connection:
-                conn.close()
-
-    def ensure_runtime_fields(self, conn: sqlite3.Connection | None = None) -> None:
-        owns_connection = conn is None
-        conn = conn or self.connect()
-
-        try:
-            self._ensure_table_columns(
-                conn,
-                self.table_name,
-                {
-                    "log_id": "INTEGER",
-                    "created_at": "TEXT",
-                    "updated_at": "TEXT",
-                    "actual_printed_length_m": "REAL",
-                    "gap_before_m": "REAL",
-                    "consumed_length_m": "REAL",
-                    "job_type": "TEXT",
-                    "is_rework": "INTEGER",
-                    "notes": "TEXT",
-                    "print_status": "TEXT",
-                    "counts_as_valid_production": "INTEGER",
-                    "counts_for_fabric_summary": "INTEGER",
-                    "counts_for_roll_export": "INTEGER",
-                    "error_reason": "TEXT",
-                    "operator_code": "TEXT",
-                    "operator_name": "TEXT",
-                    "replacement_index": "INTEGER",
-                    "suspicion_category": "TEXT",
-                    "suspicion_reason": "TEXT",
-                    "suspicion_ratio": "REAL",
-                    "suspicion_missing_length_m": "REAL",
-                    "suspicion_marked_at": "TEXT",
-                    "review_status": "TEXT",
-                    "review_note": "TEXT",
-                    "reviewed_by": "TEXT",
-                    "reviewed_at": "TEXT",
-                    "classification": "TEXT",
-                },
-            )
-
-            existing = self.table_columns(conn, self.table_name)
-
-            if "created_at" in existing:
-                conn.execute(
-                    f"""
-                    UPDATE {self.table_name}
-                    SET created_at = COALESCE(created_at, CURRENT_TIMESTAMP)
-                    WHERE created_at IS NULL
-                    """
-                )
-
-            if "updated_at" in existing:
-                conn.execute(
-                    f"""
-                    UPDATE {self.table_name}
-                    SET updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP)
-                    WHERE updated_at IS NULL
-                    """
-                )
-
-            if "review_status" in existing:
-                conn.execute(
-                    f"""
-                    UPDATE {self.table_name}
-                    SET review_status = COALESCE(review_status, ?)
-                    WHERE review_status IS NULL
-                    """,
-                    (REVIEW_PENDING,),
-                )
-
-            if "print_status" in existing:
-                conn.execute(
-                    f"""
-                    UPDATE {self.table_name}
-                    SET print_status = COALESCE(print_status, 'OK')
-                    WHERE print_status IS NULL
-                    """
-                )
-
-            self._ensure_updated_at_trigger(conn, self.table_name)
-            self.ensure_log_table(conn)
-            self.ensure_roll_tables(conn)
-            conn.commit()
-        finally:
-            if owns_connection:
-                conn.close()
-
-    def ensure_review_fields(self, conn: sqlite3.Connection | None = None) -> None:
-        self.ensure_runtime_fields(conn)
-
-    # ------------------------------------------------------------------
-    # Logs
-    # ------------------------------------------------------------------
-
-    def row_to_log(self, row: sqlite3.Row) -> Log:
-        status = row["status"] if "status" in row.keys() and row["status"] else LOG_NEW
-        parse_status = (
-            row["parse_status"]
-            if "parse_status" in row.keys() and row["parse_status"]
-            else None
-        )
-        normalized_status = (
-            row["normalized_status"]
-            if "normalized_status" in row.keys() and row["normalized_status"]
-            else None
-        )
-
-        return Log(
-            id=int(row["id"]) if row["id"] is not None else None,
-            source_path=row["source_path"] if "source_path" in row.keys() else None,
-            source_name=row["source_name"] if "source_name" in row.keys() else None,
-            fingerprint=row["fingerprint"] if "fingerprint" in row.keys() else None,
-            machine_code_raw=row["machine_code_raw"] if "machine_code_raw" in row.keys() else None,
-            captured_at=_parse_datetime(row["captured_at"]) if "captured_at" in row.keys() else None,
-            raw_payload=row["raw_payload"] if "raw_payload" in row.keys() else None,
-            status=status,
-            parse_status=parse_status,
-            normalized_status=normalized_status,
-            parse_error=row["parse_error"] if "parse_error" in row.keys() else None,
-            imported_at=_parse_datetime(row["imported_at"]) if "imported_at" in row.keys() else None,
-            job_id=int(row["job_id"]) if "job_id" in row.keys() and row["job_id"] is not None else None,
-        )
-
-    def list_logs(
-        self,
-        status: str | None = None,
-        limit: int | None = None,
-        *,
-        parse_status: str | None = None,
-        normalized_status: str | None = None,
-    ) -> list[Log]:
-        with self.connect() as conn:
-            self.ensure_runtime_fields(conn)
-            sql = "SELECT * FROM logs"
-            params: list[object] = []
-            where_clauses: list[str] = []
-
-            if status:
-                where_clauses.append("UPPER(status) = ?")
-                params.append(status.strip().upper())
-
-            if parse_status:
-                where_clauses.append("UPPER(parse_status) = ?")
-                params.append(parse_status.strip().upper())
-
-            if normalized_status:
-                where_clauses.append("UPPER(normalized_status) = ?")
-                params.append(normalized_status.strip().upper())
-
-            if where_clauses:
-                sql += " WHERE " + " AND ".join(where_clauses)
-
-            sql += " ORDER BY imported_at DESC, id DESC"
-
-            if limit is not None:
-                sql += " LIMIT ?"
-                params.append(limit)
-
-            rows = conn.execute(sql, tuple(params)).fetchall()
-            return [self.row_to_log(row) for row in rows]
-
-    def get_log_by_id(self, log_id: int) -> Log | None:
-        with self.connect() as conn:
-            self.ensure_runtime_fields(conn)
-            row = conn.execute("SELECT * FROM logs WHERE id = ?", (log_id,)).fetchone()
-            return self.row_to_log(row) if row else None
-
-    def get_log_by_fingerprint(self, fingerprint: str) -> Log | None:
-        with self.connect() as conn:
-            self.ensure_runtime_fields(conn)
-            row = conn.execute(
-                "SELECT * FROM logs WHERE fingerprint = ?",
-                (fingerprint,),
-            ).fetchone()
-            return self.row_to_log(row) if row else None
-
-    def _get_log_row_id_by_fingerprint(self, conn: sqlite3.Connection, fingerprint: str) -> int | None:
-        row = conn.execute(
-            "SELECT id FROM logs WHERE fingerprint = ?",
-            (fingerprint,),
-        ).fetchone()
-        return int(row["id"]) if row else None
-
-    def save_log(self, log: Log) -> int:
-        with self.connect() as conn:
-            self.ensure_runtime_fields(conn)
-
-            legacy_status, parse_status, normalized_status = resolve_log_status_parts(
-                getattr(log, "status", None),
-                getattr(log, "parse_status", None),
-                getattr(log, "normalized_status", None),
-            )
-
-            payload = {
-                "source_path": log.source_path,
-                "source_name": log.source_name,
-                "fingerprint": log.fingerprint,
-                "machine_code_raw": log.machine_code_raw,
-                "captured_at": _dt_to_iso(log.captured_at),
-                "raw_payload": log.raw_payload,
-                "status": legacy_status,
-                "parse_status": parse_status,
-                "normalized_status": normalized_status,
-                "parse_error": log.parse_error,
-                "imported_at": _dt_to_iso(log.imported_at) or _now_iso(),
-                "job_id": log.job_id,
-                "updated_at": _now_iso(),
-            }
-
-            if log.id is None:
-                payload["created_at"] = _now_iso()
-
-            columns = [name for name in payload.keys()]
-            placeholders = ", ".join("?" for _ in columns)
-            update_sql = ", ".join(
-                f"{name}=excluded.{name}" for name in columns if name != "created_at"
-            )
-
-            conn.execute(
-                f"""
-                INSERT INTO logs ({", ".join(columns)})
-                VALUES ({placeholders})
-                ON CONFLICT(fingerprint)
-                DO UPDATE SET {update_sql}
-                """,
-                [payload[name] for name in columns],
-            )
-
-            conn.commit()
-
-            if log.fingerprint:
-                row_id = self._get_log_row_id_by_fingerprint(conn, log.fingerprint)
-                if row_id is not None:
-                    return row_id
-
-            row = conn.execute("SELECT last_insert_rowid() AS row_id").fetchone()
-            return int(row["row_id"] or 0)
-
-    def _update_log_status(
-        self,
-        conn: sqlite3.Connection,
-        log_id: int,
-        status: str | None = None,
-        *,
-        parse_status: str | None = None,
-        normalized_status: str | None = None,
-        parse_error: str | None = None,
-        job_id: int | None = None,
-    ) -> None:
-        legacy_status, parse_value, normalized_value = resolve_log_status_parts(
-            status,
-            parse_status,
-            normalized_status,
-        )
-
-        conn.execute(
-            """
-            UPDATE logs
-            SET status = ?,
-                parse_status = ?,
-                normalized_status = ?,
-                parse_error = ?,
-                job_id = COALESCE(?, job_id),
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-            """,
-            (
-                legacy_status,
-                parse_value,
-                normalized_value,
-                parse_error,
-                job_id,
-                log_id,
-            ),
-        )
-
-    def mark_log_parsed(self, log_id: int) -> None:
-        with self.connect() as conn:
-            self.ensure_runtime_fields(conn)
-            self._update_log_status(
-                conn,
-                log_id,
-                status=LOG_PARSED,
-                parse_status=LOG_PARSE_PARSED,
-                normalized_status=LOG_NORMALIZATION_READY,
-            )
-            conn.commit()
-
-    def mark_log_invalid(self, log_id: int, parse_error: str | None = None) -> None:
-        with self.connect() as conn:
-            self.ensure_runtime_fields(conn)
-            self._update_log_status(
-                conn,
-                log_id,
-                status=LOG_INVALID,
-                parse_status=LOG_PARSE_INVALID,
-                normalized_status=LOG_NORMALIZATION_PENDING,
-                parse_error=parse_error,
-            )
-            conn.commit()
-
-    def mark_log_duplicated(self, log_id: int) -> None:
-        with self.connect() as conn:
-            self.ensure_runtime_fields(conn)
-            self._update_log_status(
-                conn,
-                log_id,
-                status=LOG_DUPLICATED,
-                parse_status=LOG_PARSE_DUPLICATED,
-                normalized_status=LOG_NORMALIZATION_PENDING,
-            )
-            conn.commit()
-
-    def mark_log_ignored(self, log_id: int) -> None:
-        with self.connect() as conn:
-            self.ensure_runtime_fields(conn)
-            self._update_log_status(
-                conn,
-                log_id,
-                status=LOG_IGNORED,
-                parse_status=LOG_PARSE_IGNORED,
-                normalized_status=LOG_NORMALIZATION_PENDING,
-            )
-            conn.commit()
-
-    def mark_log_converted(self, log_id: int, job_id: int) -> None:
-        with self.connect() as conn:
-            self.ensure_runtime_fields(conn)
-            self._update_log_status(
-                conn,
-                log_id,
-                status=LOG_CONVERTED,
-                parse_status=LOG_PARSE_PARSED,
-                normalized_status=LOG_NORMALIZATION_CONVERTED,
-                job_id=job_id,
-            )
-            conn.commit()
-
-    # ------------------------------------------------------------------
-    # Jobs
-    # ------------------------------------------------------------------
-
-    def row_to_job(self, row: sqlite3.Row) -> ProductionJob:
-        actual_printed = None
-        for key in ("actual_printed_length_m", "printed_length_m"):
-            if key in row.keys() and row[key] not in (None, ""):
-                actual_printed = float(row[key])
-                break
-        if actual_printed is None:
-            actual_printed = 0.0
-
-        gap_before = float(row["gap_before_m"] or 0.0) if "gap_before_m" in row.keys() else 0.0
-
-        consumed = None
-        for key in ("consumed_length_m", "total_consumption_m"):
-            if key in row.keys() and row[key] not in (None, ""):
-                consumed = float(row[key])
-                break
-        if consumed is None:
-            consumed = actual_printed + gap_before
-
-        pk_value = row["id"] if "id" in row.keys() else None
-
-        return ProductionJob(
-            id=pk_value,
-            log_id=row["log_id"] if "log_id" in row.keys() else None,
-            job_id=row["job_id"],
-            machine=row["machine"],
-            computer_name=row["computer_name"],
-            document=row["document"],
-            start_time=_parse_datetime(row["start_time"]),
-            end_time=_parse_datetime(row["end_time"]),
-            duration_seconds=int(row["duration_seconds"] or 0),
-            fabric=row["fabric"] if "fabric" in row.keys() else None,
-            planned_length_m=float(row["planned_length_m"] or 0.0),
-            actual_printed_length_m=actual_printed,
-            gap_before_m=gap_before,
-            consumed_length_m=consumed,
-            driver=row["driver"] if "driver" in row.keys() else None,
-            source_path=row["source_path"] if "source_path" in row.keys() else None,
-            job_type=(row["job_type"] or "PRODUCTION") if "job_type" in row.keys() else "PRODUCTION",
-            is_rework=_to_bool(row["is_rework"], default=False) if "is_rework" in row.keys() else False,
-            notes=row["notes"] if "notes" in row.keys() else None,
-            print_status=(row["print_status"] or "OK") if "print_status" in row.keys() else "OK",
-            counts_as_valid_production=_to_bool(row["counts_as_valid_production"], default=True)
-            if "counts_as_valid_production" in row.keys() else True,
-            counts_for_fabric_summary=_to_bool(row["counts_for_fabric_summary"], default=True)
-            if "counts_for_fabric_summary" in row.keys() else True,
-            counts_for_roll_export=_to_bool(row["counts_for_roll_export"], default=True)
-            if "counts_for_roll_export" in row.keys() else True,
-            error_reason=row["error_reason"] if "error_reason" in row.keys() else None,
-            operator_code=row["operator_code"] if "operator_code" in row.keys() else None,
-            operator_name=row["operator_name"] if "operator_name" in row.keys() else None,
-            replacement_index=row["replacement_index"] if "replacement_index" in row.keys() else None,
-            suspicion_category=row["suspicion_category"] if "suspicion_category" in row.keys() else None,
-            suspicion_reason=row["suspicion_reason"] if "suspicion_reason" in row.keys() else None,
-            suspicion_ratio=row["suspicion_ratio"] if "suspicion_ratio" in row.keys() else None,
-            suspicion_missing_length_m=(
-                row["suspicion_missing_length_m"]
-                if "suspicion_missing_length_m" in row.keys()
-                else None
-            ),
-            suspicion_marked_at=_parse_datetime(row["suspicion_marked_at"])
-            if "suspicion_marked_at" in row.keys()
-            else None,
-            review_status=row["review_status"] if "review_status" in row.keys() else None,
-            review_note=row["review_note"] if "review_note" in row.keys() else None,
-            reviewed_by=row["reviewed_by"] if "reviewed_by" in row.keys() else None,
-            reviewed_at=_parse_datetime(row["reviewed_at"]) if "reviewed_at" in row.keys() else None,
-            classification=row["classification"] if "classification" in row.keys() else None,
-            created_at=_parse_datetime(row["created_at"]) if "created_at" in row.keys() else None,
-            updated_at=_parse_datetime(row["updated_at"]) if "updated_at" in row.keys() else None,
-        )
-
-    def _job_unique_lookup(
-        self,
-        conn: sqlite3.Connection,
-        job: ProductionJob,
-    ) -> int | None:
-        row = conn.execute(
-            f"""
-            SELECT id
-            FROM {self.table_name}
-            WHERE job_id = ?
-              AND start_time = ?
-              AND machine = ?
-              AND document = ?
-            """,
-            (
-                job.job_id,
-                _dt_to_iso(job.start_time),
-                job.machine,
-                job.document,
-            ),
-        ).fetchone()
-        return int(row["id"]) if row else None
-
-    def list_jobs(self, limit: int | None = None) -> list[ProductionJob]:
-        with self.connect() as conn:
-            self.ensure_runtime_fields(conn)
-
-            sql = f"SELECT * FROM {self.table_name} ORDER BY start_time, job_id"
-            params: tuple[object, ...] = ()
-
-            if limit is not None:
-                sql += " LIMIT ?"
-                params = (limit,)
-
-            rows = conn.execute(sql, params).fetchall()
-            return [self.row_to_job(row) for row in rows]
-
-    def list_available_jobs(
-        self,
-        *,
-        machine: str | None = None,
-        fabric: str | None = None,
-        review_status: str | None = None,
-        include_suspicious: bool = True,
-        limit: int | None = None,
-    ) -> list[ProductionJob]:
-        """
-        Return jobs that are still eligible to be added to a roll.
-
-        Eligibility rules:
-        - not already present in roll_items
-        - counts_for_roll_export = 1 when the column exists
-        - print_status not in FAILED / CANCELED / TEST / IGNORED
-        - optional machine / fabric / review filters
-        - optional exclusion of suspicious jobs
-        """
-        with self.connect() as conn:
-            self.ensure_runtime_fields(conn)
-            columns = self.table_columns(conn)
-
-            where_clauses = [
-                "ri.job_row_id IS NULL",
-            ]
-            params: list[object] = []
-
-            if "counts_for_roll_export" in columns:
-                where_clauses.append(
-                    f"COALESCE(j.counts_for_roll_export, 1) = 1"
-                )
-
-            if "print_status" in columns:
-                where_clauses.append(
-                    "UPPER(COALESCE(j.print_status, 'OK')) NOT IN ('FAILED', 'CANCELED', 'TEST', 'IGNORED')"
-                )
-
-            if machine:
-                where_clauses.append("UPPER(COALESCE(j.machine, '')) = ?")
-                params.append(machine.strip().upper())
-
-            if fabric:
-                where_clauses.append("UPPER(COALESCE(j.fabric, '')) = ?")
-                params.append(fabric.strip().upper())
-
-            if review_status and review_status.strip().upper() != "ALL":
-                where_clauses.append("UPPER(COALESCE(j.review_status, '')) = ?")
-                params.append(review_status.strip().upper())
-
-            if not include_suspicious:
-                suspicion_checks = []
-                if "suspicion_category" in columns:
-                    suspicion_checks.append("j.suspicion_category IS NULL")
-                if "suspicion_reason" in columns:
-                    suspicion_checks.append("j.suspicion_reason IS NULL")
-
-                if suspicion_checks:
-                    where_clauses.append(" AND ".join(suspicion_checks))
-
-            sql = f"""
-                SELECT j.*
-                FROM {self.table_name} j
-                LEFT JOIN roll_items ri
-                    ON ri.job_row_id = j.id
-                WHERE {" AND ".join(where_clauses)}
-                ORDER BY j.start_time, j.job_id, j.id
-            """
-
-            if limit is not None:
-                sql += " LIMIT ?"
-                params.append(int(limit))
-
-            rows = conn.execute(sql, tuple(params)).fetchall()
-            return [self.row_to_job(row) for row in rows]
-
-    def get_job_by_row_id(self, row_id: int) -> ProductionJob | None:
-        with self.connect() as conn:
-            self.ensure_runtime_fields(conn)
-            row = conn.execute(
-                f"SELECT * FROM {self.table_name} WHERE id = ?",
-                (row_id,),
-            ).fetchone()
-            return self.row_to_job(row) if row else None
-
-    def get_available_job_by_row_id(self, row_id: int) -> ProductionJob | None:
-        jobs = self.list_available_jobs(limit=None)
-        for job in jobs:
-            if int(job.id or 0) == int(row_id):
-                return job
-        return None
-
-    def job_is_assigned_to_any_roll(self, job_row_id: int) -> bool:
-        with self.connect() as conn:
-            self.ensure_runtime_fields(conn)
-            row = conn.execute(
-                """
-                SELECT 1
-                FROM roll_items
-                WHERE job_row_id = ?
-                LIMIT 1
-                """,
-                (job_row_id,),
-            ).fetchone()
-            return row is not None
-
-    def get_job_by_job_id(self, job_id: str) -> ProductionJob | None:
-        with self.connect() as conn:
-            self.ensure_runtime_fields(conn)
-            rows = conn.execute(
-                f"SELECT * FROM {self.table_name} WHERE job_id = ? ORDER BY start_time, id",
-                (job_id,),
-            ).fetchall()
-
-            if not rows:
-                return None
-
-            if len(rows) > 1:
-                raise ValueError(
-                    f"Mais de um registro encontrado para job_id={job_id}. Use o ID interno."
-                )
-
-            return self.row_to_job(rows[0])
-
-    def save_job(self, job: ProductionJob) -> int:
-        with self.connect() as conn:
-            self.ensure_runtime_fields(conn)
-            columns = self.table_columns(conn)
-            now_iso = _now_iso()
-
-            payload = {
-                "log_id": getattr(job, "log_id", None),
-                "job_id": job.job_id,
-                "machine": job.machine,
-                "computer_name": job.computer_name,
-                "document": job.document,
-                "start_time": _dt_to_iso(job.start_time),
-                "end_time": _dt_to_iso(job.end_time),
-                "duration_seconds": int(job.duration_seconds or 0),
-                "fabric": job.fabric,
-                "planned_length_m": float(job.planned_length_m or 0.0),
-                "actual_printed_length_m": float(job.actual_printed_length_m or 0.0),
-                "gap_before_m": float(job.gap_before_m or 0.0),
-                "consumed_length_m": float(job.consumed_length_m or 0.0),
-                "driver": job.driver,
-                "source_path": job.source_path,
-                "job_type": job.job_type,
-                "is_rework": int(bool(job.is_rework)),
-                "notes": job.notes,
-                "print_status": job.print_status,
-                "counts_as_valid_production": int(bool(job.counts_as_valid_production)),
-                "counts_for_fabric_summary": int(bool(job.counts_for_fabric_summary)),
-                "counts_for_roll_export": int(bool(job.counts_for_roll_export)),
-                "error_reason": job.error_reason,
-                "operator_code": job.operator_code,
-                "operator_name": job.operator_name,
-                "replacement_index": job.replacement_index,
-                "suspicion_category": job.suspicion_category,
-                "suspicion_reason": job.suspicion_reason,
-                "suspicion_ratio": job.suspicion_ratio,
-                "suspicion_missing_length_m": job.suspicion_missing_length_m,
-                "suspicion_marked_at": _dt_to_iso(job.suspicion_marked_at),
-                "review_status": job.review_status,
-                "review_note": job.review_note,
-                "reviewed_by": job.reviewed_by,
-                "reviewed_at": _dt_to_iso(job.reviewed_at),
-                "classification": getattr(job, "classification", None),
-            }
-
-            if "created_at" in columns and job.id is None:
-                payload["created_at"] = now_iso
-            if "updated_at" in columns:
-                payload["updated_at"] = now_iso
-
-            insert_columns = [name for name in payload.keys() if name in columns]
-            placeholders = ", ".join("?" for _ in insert_columns)
-            update_sql = ", ".join(
-                f"{name}=excluded.{name}" for name in insert_columns if name != "created_at"
-            )
-
-            conn.execute(
-                f"""
-                INSERT INTO {self.table_name} ({", ".join(insert_columns)})
-                VALUES ({placeholders})
-                ON CONFLICT(job_id, start_time, machine, document)
-                DO UPDATE SET {update_sql}
-                """,
-                [payload[name] for name in insert_columns],
-            )
-
-            job_row_id = self._job_unique_lookup(conn, job)
-            if job_row_id is None:
-                row = conn.execute("SELECT last_insert_rowid() AS row_id").fetchone()
-                job_row_id = int(row["row_id"] or 0)
-
-            log_id = getattr(job, "log_id", None)
-            if log_id is not None:
-                self._update_log_status(
-                    conn,
-                    int(log_id),
-                    status=LOG_CONVERTED,
-                    parse_status=LOG_PARSE_PARSED,
-                    normalized_status=LOG_NORMALIZATION_CONVERTED,
-                    job_id=job_row_id,
-                )
-
-            conn.commit()
-            return int(job_row_id)
-
-    def mark_job_suspicion(
-        self,
-        row_id: int,
-        category: str,
-        reason: str | None,
-        ratio: float | None,
-        missing_length_m: float | None,
-        preserve_reviewed: bool = True,
-    ) -> None:
-        with self.connect() as conn:
-            self.ensure_runtime_fields(conn)
-            columns = self.table_columns(conn)
-            pk_column = self._pk_column(conn)
-
-            row = conn.execute(
-                f"SELECT review_status FROM {self.table_name} WHERE {pk_column} = ?",
-                (row_id,),
-            ).fetchone()
-
-            current_review_status = row["review_status"] if row else None
-            next_review_status = current_review_status
-
-            if not current_review_status:
-                next_review_status = REVIEW_PENDING
-            elif not preserve_reviewed and current_review_status != REVIEW_PENDING:
-                next_review_status = REVIEW_PENDING
-
-            fields: dict[str, object] = {
-                "suspicion_category": category,
-                "suspicion_reason": reason,
-                "suspicion_ratio": ratio,
-                "suspicion_missing_length_m": missing_length_m,
-                "suspicion_marked_at": _now_iso(),
-            }
-
-            if "review_status" in columns and next_review_status is not None:
-                fields["review_status"] = next_review_status
-
-            if "updated_at" in columns:
-                fields["updated_at"] = _now_iso()
-
-            set_clause = ", ".join(f"{name} = ?" for name in fields.keys())
-            params = [fields[name] for name in fields.keys()]
-            params.append(row_id)
-
-            conn.execute(
-                f"UPDATE {self.table_name} SET {set_clause} WHERE {pk_column} = ?",
-                params,
-            )
-            conn.commit()
-
-    def clear_stale_pending_suspicions(self, active_row_ids: set[int]) -> int:
-        with self.connect() as conn:
-            self.ensure_runtime_fields(conn)
-            columns = self.table_columns(conn)
-            pk_column = self._pk_column(conn)
-
-            rows = conn.execute(
-                f"""
-                SELECT {pk_column} AS pk_id
-                FROM {self.table_name}
-                WHERE suspicion_category IS NOT NULL
-                  AND (review_status IS NULL OR review_status = ?)
-                """,
-                (REVIEW_PENDING,),
-            ).fetchall()
-
-            stale_ids = [
-                int(row["pk_id"])
-                for row in rows
-                if int(row["pk_id"]) not in active_row_ids
-            ]
-
-            if not stale_ids:
-                return 0
-
-            fields: dict[str, object] = {
-                "suspicion_category": None,
-                "suspicion_reason": None,
-                "suspicion_ratio": None,
-                "suspicion_missing_length_m": None,
-                "suspicion_marked_at": None,
-            }
-
-            if "review_status" in columns:
-                fields["review_status"] = None
-            if "updated_at" in columns:
-                fields["updated_at"] = _now_iso()
-
-            set_clause = ", ".join(f"{name} = ?" for name in fields.keys())
-            placeholders = ", ".join("?" for _ in stale_ids)
-            params = [fields[name] for name in fields.keys()] + stale_ids
-
-            conn.execute(
-                f"""
-                UPDATE {self.table_name}
-                SET {set_clause}
-                WHERE {pk_column} IN ({placeholders})
-                """,
-                params,
-            )
-            conn.commit()
-            return len(stale_ids)
-
-    def update_review(
-        self,
-        row_id: int,
-        review_status: str,
-        review_note: str | None = None,
-        reviewed_by: str | None = None,
-    ) -> None:
-        with self.connect() as conn:
-            self.ensure_runtime_fields(conn)
-            columns = self.table_columns(conn)
-            pk_column = self._pk_column(conn)
-
-            fields: dict[str, object] = {
-                "review_status": review_status,
-                "review_note": review_note,
-                "reviewed_by": reviewed_by,
-                "reviewed_at": _now_iso(),
-            }
-
-            if "updated_at" in columns:
-                fields["updated_at"] = _now_iso()
-
-            set_clause = ", ".join(f"{name} = ?" for name in fields.keys())
-            params = [fields[name] for name in fields.keys()]
-            params.append(row_id)
-
-            conn.execute(
-                f"UPDATE {self.table_name} SET {set_clause} WHERE {pk_column} = ?",
-                params,
-            )
-            conn.commit()
-
-    def apply_review_failed_operational_effects(
-        self,
-        row_id: int,
-        error_reason: str | None = None,
-    ) -> None:
-        with self.connect() as conn:
-            self.ensure_runtime_fields(conn)
-            columns = self.table_columns(conn)
-            pk_column = self._pk_column(conn)
-
-            current_row = conn.execute(
-                f"""
-                SELECT error_reason
-                FROM {self.table_name}
-                WHERE {pk_column} = ?
-                """,
-                (row_id,),
-            ).fetchone()
-
-            current_error_reason = current_row["error_reason"] if current_row else None
-
-            fields: dict[str, object] = {}
-
-            if "print_status" in columns:
-                fields["print_status"] = "FAILED"
-
-            if "counts_as_valid_production" in columns:
-                fields["counts_as_valid_production"] = 0
-
-            if "counts_for_fabric_summary" in columns:
-                fields["counts_for_fabric_summary"] = 0
-
-            if "counts_for_roll_export" in columns:
-                fields["counts_for_roll_export"] = 0
-
-            if "error_reason" in columns:
-                if error_reason is not None and str(error_reason).strip():
-                    fields["error_reason"] = error_reason
-                elif not (current_error_reason or "").strip():
-                    fields["error_reason"] = "REVIEW_CONFIRMED_FAILED"
-
-            if "updated_at" in columns:
-                fields["updated_at"] = _now_iso()
-
-            if not fields:
+        self._import_paths(list(paths))
+
+    def on_import_folder(self):
+        folder = filedialog.askdirectory(title="Selecionar pasta com logs .txt")
+        if not folder:
+            return
+        p = Path(folder)
+        paths = [str(x) for x in p.glob("*.txt")]
+        self._import_paths(paths)
+
+    def _import_paths(self, paths: List[str]):
+        if not paths:
+            return
+
+        txts = [p for p in paths if p.lower().endswith(".txt")]
+        if not txts:
+            messagebox.showwarning("Sem .txt", "Solte/seleciona apenas arquivos .txt.")
+            return
+
+        # Import incremental:
+        # - Se já existe máquina definida, não pergunta de novo
+        # - Não apaga import anterior
+        if self.machine:
+            machine = self.machine
+        else:
+            machine = self.ask_machine()
+            if not machine:
+                self.status.configure(text="Importação cancelada.")
                 return
 
-            set_clause = ", ".join(f"{name} = ?" for name in fields.keys())
-            params = [fields[name] for name in fields.keys()]
-            params.append(row_id)
+            self.machine = machine
+            self.lbl_machine.configure(text=f"Máquina do lote: {machine}")
 
-            conn.execute(
-                f"UPDATE {self.table_name} SET {set_clause} WHERE {pk_column} = ?",
-                params,
+            if not self.var_roll.get().strip():
+                self.var_roll.set(self._auto_roll_name())
+
+        parsed: List[Job] = []
+        skipped_invalid = 0
+
+        # Dedupe por caminho completo (evita reimportar o mesmo arquivo)
+        existing_src = set(j.src_file for j in self.Jobs) if self.Jobs else set()
+
+        for p in txts:
+            p_full = str(p)
+            if p_full in existing_src:
+                continue
+
+            j = parse_log_txt(p_full)
+            if not j:
+                skipped_invalid += 1
+                continue
+
+            # Valida HeightMM
+            if j.height_mm <= 0:
+                skipped_invalid += 1
+                continue
+
+            # Recalcula real_m (sanity check explícita)
+            correct_real_m = j.height_mm / 1000.0
+            if abs(j.real_m - correct_real_m) > 0.001:
+                skipped_invalid += 1
+                continue
+
+            parsed.append(j)
+            existing_src.add(j.src_file)
+
+        if not parsed and not self.Jobs:
+            messagebox.showerror("Falha", "Nenhum log válido encontrado.")
+            return
+
+        # Merge incremental
+        if parsed:
+            self.Jobs.extend(parsed)
+
+        self.blocks = build_blocks(self.Jobs, machine)
+
+        self.refresh_blocks()
+        self.clear_details()
+
+        extra = f" | Ignorados: {skipped_invalid}" if skipped_invalid else ""
+        added = f" | +{len(parsed)} novos" if parsed else " | +0 novos"
+        self.status.configure(
+            text=f"Importado total: {len(self.Jobs)} logs{added} | Blocos: {len(self.blocks)} | Máquina: {machine}{extra}"
+        )
+
+    # --------------------------
+    # Clear / refresh
+    # --------------------------
+    def on_clear(self):
+        self.machine = None
+        self.Jobs = []
+        self.blocks = []
+        self.var_roll.set("")
+        self.lbl_machine.configure(text="Máquina do lote: (não definida)")
+        self.tree_blocks.delete(*self.tree_blocks.get_children())
+        self.tree_Jobs.delete(*self.tree_Jobs.get_children())
+        self.var_detail_title.set("Selecione um tecido na lista abaixo...")
+        self.status.configure(text="Limpo.")
+
+    def refresh_blocks(self):
+        self.tree_blocks.delete(*self.tree_blocks.get_children())
+        for idx, b in enumerate(self.blocks, start=1):
+            self.tree_blocks.insert(
+                "",
+                "end",
+                iid=str(idx - 1),
+                values=(
+                    idx,
+                    b.fabric,
+                    f"{_round_up_cm(b.total_m):.2f} m",
+                    b.job_count,
+                    b.newest_end.strftime("%d/%m/%Y %H:%M:%S"),
+                ),
             )
-            conn.commit()
 
-    def list_pending_reviews(self) -> list[ProductionJob]:
-        with self.connect() as conn:
-            self.ensure_runtime_fields(conn)
+    def clear_details(self):
+        self.var_detail_title.set("Selecione um tecido na lista abaixo...")
+        self.tree_Jobs.delete(*self.tree_Jobs.get_children())
 
-            rows = conn.execute(
-                f"""
-                SELECT *
-                FROM {self.table_name}
-                WHERE review_status = ?
-                ORDER BY suspicion_marked_at, start_time, job_id
-                """,
-                (REVIEW_PENDING,),
-            ).fetchall()
+    def on_select_block(self, _evt=None):
+        sel = self.tree_blocks.selection()
+        if not sel:
+            return
+        bi = int(sel[0])
+        if bi < 0 or bi >= len(self.blocks):
+            return
+        b = self.blocks[bi]
 
-            return [self.row_to_job(row) for row in rows]
-
-    # ------------------------------------------------------------------
-    # Rolls
-    # ------------------------------------------------------------------
-
-    def row_to_roll(self, row: sqlite3.Row) -> Roll:
-        return Roll(
-            id=int(row["id"]),
-            roll_name=row["roll_name"],
-            machine=row["machine"],
-            fabric=row["fabric"],
-            status=row["status"],
-            note=row["note"],
-            created_at=_parse_datetime(row["created_at"]),
-            closed_at=_parse_datetime(row["closed_at"]),
-            updated_at=_parse_datetime(row["updated_at"]),
-            exported_at=_parse_datetime(row["exported_at"]) if "exported_at" in row.keys() else None,
-            reviewed_at=_parse_datetime(row["reviewed_at"]) if "reviewed_at" in row.keys() else None,
-            reopened_at=_parse_datetime(row["reopened_at"]) if "reopened_at" in row.keys() else None,
+        title = (
+            f"Tecido: {b.fabric} | Máquina: {b.machine} | Pedidos: {b.job_count} | "
+            f"Total: {fmt_m(b.total_m)} | "
+            f"{b.newest_end:%d/%m/%Y %H:%M:%S} → {b.oldest_end:%d/%m/%Y %H:%M:%S}"
         )
+        self.var_detail_title.set(title)
 
-    def row_to_roll_item(self, row: sqlite3.Row) -> RollItem:
-        return RollItem(
-            id=int(row["id"]),
-            roll_id=int(row["roll_id"]),
-            job_row_id=int(row["job_row_id"]),
-            job_id=row["job_id"],
-            document=row["document"],
-            machine=row["machine"],
-            fabric=row["fabric"],
-            sort_order=int(row["sort_order"]),
-            planned_length_m=float(row["planned_length_m"] or 0.0),
-            effective_printed_length_m=float(row["effective_printed_length_m"] or 0.0),
-            consumed_length_m=float(row["consumed_length_m"] or 0.0),
-            gap_before_m=float(row["gap_before_m"] or 0.0),
-            metric_category=row["metric_category"],
-            review_status=row["review_status"],
-            snapshot_print_status=row["snapshot_print_status"],
-            created_at=_parse_datetime(row["created_at"]),
-        )
+        self.tree_Jobs.delete(*self.tree_Jobs.get_children())
+        for j in sorted(b.Jobs, key=lambda jj: jj.end_time, reverse=True):
+            self.tree_Jobs.insert(
+                "",
+                "end",
+                values=(
+                    j.end_time.strftime("%d/%m/%Y %H:%M:%S"),
+                    j.document,
+                    f"{j.height_mm:.1f}",
+                    f"{j.vpos_mm:.1f}",
+                    fmt_m(j.real_m, suffix=False),
+                ),
+            )
 
-    def generate_roll_name(
-        self,
-        machine: str | None = None,
-        opened_at: datetime | None = None,
-        conn: sqlite3.Connection | None = None,
-    ) -> str:
-        owns_connection = conn is None
-        conn = conn or self.connect()
+    # --------------------------
+    # Export
+    # --------------------------
+    def _get_export_dir(self) -> Path:
+        export_dir = Path(self.mcfg.get("export_dir", r"C:\Registro"))
+        export_dir.mkdir(parents=True, exist_ok=True)
+        return export_dir
+
+    def on_export(self, which: str):
+        if not self.blocks or not self.machine:
+            messagebox.showwarning("Nada para exportar", "Importe logs primeiro.")
+            return
+
+        if canvas is None:
+            messagebox.showerror("Dependência faltando", "Instale reportlab: pip install reportlab")
+            return
+
+        if not _HAS_PYMUPDF:
+            messagebox.showerror("Dependência faltando", "Instale pymupdf: pip install pymupdf")
+            return
+
+        if not _HAS_PIL:
+            messagebox.showerror("Dependência faltando", "Instale pillow: pip install pillow")
+            return
+
+        roll = self._get_roll_name()
+        mode = "full"
+        mode_tag = "FULL"
+
+        # -------------------------
+        # Pastas padronizadas (PXCore base)
+        # -------------------------
+        dt = datetime.now()
+        pdf_dir = _pdf_out_dir(dt)       # .../pdf/PXPrintLogs/rolls/YYYY/MM
+        jpg_dir = _print_out_dir(dt)     # .../print/PXPrintLogs/jpg/YYYY/MM
+        tmp_dir = _temp_dir()            # .../temp/PXPrintLogs
+
+        # -------------------------
+        # Nome padronizado
+        # -------------------------
+        date_iso = dt.strftime("%Y-%m-%d")
+        roll_safe = _sanitize_filename(roll)
+        base_name = f"{date_iso}_{self.machine}_{roll_safe}_{mode_tag}"
+
+        # Nomes finais (sem sobrescrever: _v2, _v3...)
+        normal_path = str(_versioned_path(pdf_dir / f"{base_name}.pdf"))
+        mirror_path = str(_versioned_path(jpg_dir / f"{base_name}.jpg"))  # espelhado é JPG
+
+        # PDF temporário (espelhado) para gerar JPG (não fica na pasta final)
+        tmp_mirror_pdf = str(tmp_dir / f"{base_name}.tmp.pdf")
+
+        # parâmetros do JPG (calcula 1 vez e reutiliza)
+        target_cm = float(self._get_mirror_target_cm())
+        dpi = int(self.mcfg.get("mirror_jpg_dpi", 300))
+
+        # Validação de integridade
+        for j in self.Jobs:
+            if j.height_mm <= 0:
+                messagebox.showerror("Dados inválidos", f"HeightMM inválido no job: {j.document}")
+                return
+            if abs(j.real_m - (j.height_mm / 1000.0)) > 0.001:
+                messagebox.showerror("Dados inválidos", "Inconsistência em real_m detectada.")
+                return
 
         try:
-            self.ensure_runtime_fields(conn)
-            self.ensure_roll_tables(conn)
+            if which == "normal":
+                export_pdf(normal_path, self.blocks, roll, self.machine, mode=mode, mirrored=False)
 
-            dt = opened_at or datetime.now()
-            machine_code = _norm_machine(machine)
-            prefix_machine = machine_code if machine_code else "PENDENTE"
-            date_key = dt.strftime("%Y%m%d")
-            prefix = f"{prefix_machine}_{date_key}_"
-
-            rows = conn.execute(
-                """
-                SELECT roll_name
-                FROM rolls
-                WHERE roll_name LIKE ?
-                ORDER BY roll_name
-                """,
-                (f"{prefix}%",),
-            ).fetchall()
-
-            max_seq = 0
-            for row in rows:
-                name = str(row["roll_name"])
-                suffix = name.rsplit("_", 1)[-1]
-                if suffix.isdigit():
-                    max_seq = max(max_seq, int(suffix))
-
-            next_seq = max_seq + 1
-            return f"{prefix_machine}_{date_key}_{next_seq:03d}"
-        finally:
-            if owns_connection:
-                conn.close()
-
-    def create_roll(
-        self,
-        machine: str | None = None,
-        fabric: str | None = None,
-        note: str | None = None,
-        roll_name: str | None = None,
-    ) -> int:
-        with self.connect() as conn:
-            self.ensure_runtime_fields(conn)
-            self.ensure_roll_tables(conn)
-
-            machine_code = _norm_machine(machine)
-            fabric_code = _norm_fabric(fabric)
-
-            final_roll_name = (roll_name.strip().upper() if roll_name else None) or self.generate_roll_name(
-                machine=machine_code or None,
-                conn=conn,
-            )
-
-            try:
-                cursor = conn.execute(
-                    """
-                    INSERT INTO rolls (
-                        roll_name,
-                        machine,
-                        fabric,
-                        status,
-                        note,
-                        created_at,
-                        updated_at
-                    )
-                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                    """,
-                    (final_roll_name, machine_code, fabric_code, ROLL_OPEN, note),
+            elif which == "mirror":
+                export_pdf(tmp_mirror_pdf, self.blocks, roll, self.machine, mode=mode, mirrored=True)
+                pdf_first_page_to_jpg_scaled(
+                    tmp_mirror_pdf,
+                    mirror_path,
+                    target_width_cm=target_cm,
+                    dpi=dpi,
+                    quality=95,
                 )
-                conn.commit()
-                return int(cursor.lastrowid)
-            except sqlite3.IntegrityError as exc:
-                message = str(exc).lower()
-                if "rolls.roll_name" in message or "unique constraint failed: rolls.roll_name" in message:
-                    raise ValueError(
-                        f"Já existe um rolo com o nome '{final_roll_name}'. "
-                        "Use outro nome ou deixe o Nexor gerar automaticamente."
-                    ) from exc
-                raise
+                Path(tmp_mirror_pdf).unlink(missing_ok=True)
 
-    def append_roll_note(
-        self,
-        roll_id: int,
-        note: str,
-        operator: str | None = None,
-    ) -> None:
-        if not note or not note.strip():
-            raise ValueError("A observação não pode estar vazia.")
+            elif which == "both":
+                export_pdf(normal_path, self.blocks, roll, self.machine, mode=mode, mirrored=False)
 
-        with self.connect() as conn:
-            self.ensure_runtime_fields(conn)
-            self.ensure_roll_tables(conn)
+                export_pdf(tmp_mirror_pdf, self.blocks, roll, self.machine, mode=mode, mirrored=True)
+                pdf_first_page_to_jpg_scaled(
+                    tmp_mirror_pdf,
+                    mirror_path,
+                    target_width_cm=target_cm,
+                    dpi=dpi,
+                    quality=95,
+                )
+                Path(tmp_mirror_pdf).unlink(missing_ok=True)
 
-            row = conn.execute(
-                "SELECT note FROM rolls WHERE id = ?",
-                (roll_id,),
-            ).fetchone()
+            else:
+                return
 
-            if not row:
-                raise ValueError(f"Rolo não encontrado: id={roll_id}")
-
-            current_note = row["note"] or ""
-            timestamp = _now_display()
-            operator_label = f"[{operator.strip()}] " if operator and operator.strip() else ""
-            new_entry = f"[{timestamp}] {operator_label}{note.strip()}"
-
-            final_note = f"{current_note}\n{new_entry}".strip() if current_note.strip() else new_entry
-
-            conn.execute(
-                """
-                UPDATE rolls
-                SET note = ?,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-                """,
-                (final_note, roll_id),
-            )
-            conn.commit()
-
-    def list_rolls(self, status: str | None = None) -> list[Roll]:
-        with self.connect() as conn:
-            self.ensure_runtime_fields(conn)
-            self.ensure_roll_tables(conn)
-
-            sql = "SELECT * FROM rolls"
-            params: tuple[object, ...] = ()
-
-            if status and status.upper() != "ALL":
-                sql += " WHERE status = ?"
-                params = (status.upper(),)
-
-            sql += " ORDER BY created_at DESC, id DESC"
-
-            rows = conn.execute(sql, params).fetchall()
-            return [self.row_to_roll(row) for row in rows]
-
-    def get_roll(self, roll_id: int | None = None, roll_name: str | None = None) -> Roll | None:
-        if roll_id is None and roll_name is None:
-            raise ValueError("Informe roll_id ou roll_name.")
-
-        with self.connect() as conn:
-            self.ensure_runtime_fields(conn)
-            self.ensure_roll_tables(conn)
-
-            if roll_id is not None:
-                row = conn.execute(
-                    "SELECT * FROM rolls WHERE id = ?",
-                    (roll_id,),
-                ).fetchone()
-                return self.row_to_roll(row) if row else None
-
-            row = conn.execute(
-                "SELECT * FROM rolls WHERE roll_name = ?",
-                (roll_name,),
-            ).fetchone()
-            return self.row_to_roll(row) if row else None
-
-    def _get_job_for_roll(
-        self,
-        conn: sqlite3.Connection,
-        job_row_id: int | None = None,
-        job_id: str | None = None,
-    ) -> ProductionJob:
-        if job_row_id is None and job_id is None:
-            raise ValueError("Informe job_row_id ou job_id.")
-
-        if job_row_id is not None:
-            row = conn.execute(
-                f"SELECT * FROM {self.table_name} WHERE id = ?",
-                (job_row_id,),
-            ).fetchone()
-            if not row:
-                raise ValueError(f"Job não encontrado para id={job_row_id}.")
-            return self.row_to_job(row)
-
-        rows = conn.execute(
-            f"SELECT * FROM {self.table_name} WHERE job_id = ? ORDER BY start_time, id",
-            (job_id,),
-        ).fetchall()
-
-        if not rows:
-            raise ValueError(f"Job não encontrado para job_id={job_id}.")
-        if len(rows) > 1:
-            raise ValueError(
-                f"Mais de um registro encontrado para job_id={job_id}. Use o ID interno."
-            )
-
-        return self.row_to_job(rows[0])
-
-    def list_roll_items(self, roll_id: int) -> list[RollItem]:
-        with self.connect() as conn:
-            self.ensure_runtime_fields(conn)
-            self.ensure_roll_tables(conn)
-
-            rows = conn.execute(
-                """
-                SELECT *
-                FROM roll_items
-                WHERE roll_id = ?
-                ORDER BY sort_order, id
-                """,
-                (roll_id,),
-            ).fetchall()
-
-            return [self.row_to_roll_item(row) for row in rows]
-
-    def _resequence_roll_items(self, conn: sqlite3.Connection, roll_id: int) -> None:
-        rows = conn.execute(
-            """
-            SELECT id
-            FROM roll_items
-            WHERE roll_id = ?
-            ORDER BY sort_order, id
-            """,
-            (roll_id,),
-        ).fetchall()
-
-        for index, row in enumerate(rows, start=1):
-            conn.execute(
-                """
-                UPDATE roll_items
-                SET sort_order = ?
-                WHERE id = ?
-                """,
-                (index, int(row["id"])),
-            )
-
-    def _update_auto_roll_name_if_needed(
-        self,
-        conn: sqlite3.Connection,
-        roll_id: int,
-        current_roll_name: str,
-        machine_code: str,
-    ) -> None:
-        if not machine_code:
+        except Exception as e:
+            messagebox.showerror("Erro ao exportar", str(e))
             return
 
-        current_name = (current_roll_name or "").strip().upper()
-        if not current_name.startswith("PENDENTE_"):
-            return
 
-        new_name = self.generate_roll_name(machine=machine_code, conn=conn)
-        conn.execute(
-            """
-            UPDATE rolls
-            SET roll_name = ?,
-                updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-            """,
-            (new_name, roll_id),
-        )
+        # -------------------------
+        # Registro simples de auditoria local
+        # -------------------------
+        try:
+            audit_dir = _nexor_base_dir() / "audit" / MODULE_NAME
+            audit_dir.mkdir(parents=True, exist_ok=True)
+            audit_path = audit_dir / f"exports_{datetime.now().strftime('%Y%m')}.jsonl"
 
-    def _sync_roll_identity_from_items(self, conn: sqlite3.Connection, roll_id: int) -> None:
-        rows = conn.execute(
-            """
-            SELECT machine, fabric
-            FROM roll_items
-            WHERE roll_id = ?
-            ORDER BY sort_order, id
-            """,
-            (roll_id,),
-        ).fetchall()
+            orders_payload = [
+                {
+                    "end_time": j.end_time.isoformat(timespec="seconds"),
+                    "document": j.document,
+                    "fabric": j.fabric,
+                    "height_mm": float(j.height_mm),
+                    "vpos_mm": float(j.vpos_mm),
+                    "real_m": float(j.real_m),
+                    "source_path": j.src_file,
+                }
+                for j in self.Jobs
+            ]
 
-        roll_row = conn.execute(
-            "SELECT roll_name FROM rolls WHERE id = ?",
-            (roll_id,),
-        ).fetchone()
+            payload = {
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "app_version": APP_VERSION,
+                "machine": self.machine,
+                "roll_name": roll,
+                "export_mode": "full",
+                "which": which,
+                "pdf_dir": str(pdf_dir),
+                "jpg_dir": str(jpg_dir),
+                "normal_path": normal_path if which in ("normal", "both") else None,
+                "mirror_path": mirror_path if which in ("mirror", "both") else None,
+                "mirror_width_cm": (target_cm if which in ("mirror", "both") else None),
+                "mirror_dpi": (dpi if which in ("mirror", "both") else None),
+                "orders": orders_payload,
+            }
 
-        if not roll_row:
-            raise ValueError(f"Rolo não encontrado: id={roll_id}")
+            with audit_path.open("a", encoding="utf-8") as f:
+                f.write(json.dumps(payload, ensure_ascii=False) + "\n")
 
-        if not rows:
-            conn.execute(
-                """
-                UPDATE rolls
-                SET machine = '',
-                    fabric = NULL,
-                    updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
-                """,
-                (roll_id,),
+            self.status.configure(text=self.status.cget("text") + " | auditoria local ok")
+
+        except Exception as e:
+            self.status.configure(text=self.status.cget("text") + f" | auditoria local erro: {type(e).__name__}")
+
+        # -------------------------
+        # Mensagem final
+        # -------------------------
+        # Para o usuário, faz sentido mostrar a pasta do PDF (principal “comprovante”)
+        shown_dir = pdf_dir
+
+        if which == "both":
+            messagebox.showinfo(
+                "Exportado",
+                f"PDF (comprovante):\n{pdf_dir}\n"
+                f"JPG (operação):\n{jpg_dir}\n\n"
+                f"{Path(normal_path).name}\n"
+                f"{Path(mirror_path).name}"
             )
-            return
-
-        machines = []
-        fabrics = []
-
-        for row in rows:
-            machine_code = _norm_machine(row["machine"])
-            if machine_code:
-                machines.append(machine_code)
-
-            fabric_code = _norm_fabric(row["fabric"])
-            if fabric_code:
-                fabrics.append(fabric_code)
-
-        first_machine = machines[0] if machines else ""
-        distinct_fabrics = sorted(set(fabrics))
-
-        if not distinct_fabrics:
-            roll_fabric = None
-        elif len(distinct_fabrics) == 1:
-            roll_fabric = distinct_fabrics[0]
+        elif which == "normal":
+            messagebox.showinfo(
+                "Exportado",
+                f"PDF (comprovante):\n{shown_dir}\n\n{Path(normal_path).name}"
+            )
         else:
-            roll_fabric = "MISTO"
+            messagebox.showinfo(
+                "Exportado",
+                f"JPG (operação):\n{jpg_dir}\n\n{Path(mirror_path).name}"
+            )
 
-        self._update_auto
+    def refresh_all(self):
+        self._ensure_export_dir()
+
+PXPrintLogsUI = OperationsPanel
+
+def build_ui(parent):
+    return OperationsPanel(parent)

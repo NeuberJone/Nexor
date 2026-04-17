@@ -836,21 +836,21 @@ class OperationsPanel(ttk.Frame):
         ttk.Label(top, text="Nome do rolo").grid(row=0, column=0, sticky="w")
         self.var_roll = tk.StringVar(value="")
         ttk.Entry(top, textvariable=self.var_roll, width=28).grid(row=0, column=1, padx=(6, 6), sticky="w")
-        ttk.Button(top, text="Atualizar nome", command=self.on_refresh_roll_name).grid(row=0, column=2, padx=(0, 12), sticky="w")
-
-        self.lbl_machine = ttk.Label(top, text="Máquina do lote: (não definida)")
-        self.lbl_machine.grid(row=1, column=0, columnspan=4, sticky="w", pady=(6, 0))
+        ttk.Button(top, text="Atualizar nome", command=self.on_refresh_roll_name).grid(row=0, column=2, padx=(0, 16), sticky="w")
 
         btns = ttk.Frame(top)
-        btns.grid(row=1, column=4, columnspan=3, sticky="e", pady=(6, 0))
+        btns.grid(row=0, column=3, columnspan=4, sticky="w")
 
         row_actions = ttk.Frame(btns)
-        row_actions.pack(anchor="e")
+        row_actions.pack(anchor="w")
         ttk.Button(row_actions, text="Importar logs", command=self.on_import_files).pack(side="left", padx=4)
         ttk.Button(row_actions, text="Importar pasta", command=self.on_import_folder).pack(side="left", padx=4)
         ttk.Button(row_actions, text="Tecidos...", command=self.open_fabrics_dialog).pack(side="left", padx=4)
         ttk.Button(row_actions, text="Exportação...", command=self.open_export_dialog).pack(side="left", padx=4)
         ttk.Button(row_actions, text="Limpar", command=self.on_clear).pack(side="left", padx=4)
+
+        self.lbl_machine = ttk.Label(top, text="Máquina do lote: (não definida)")
+        self.lbl_machine.grid(row=1, column=0, columnspan=7, sticky="w", pady=(8, 0))
 
         drop_frame = ttk.LabelFrame(self, text="Arraste e solte logs .txt aqui")
         drop_frame.pack(fill="x", padx=10, pady=(0, 10))
@@ -1398,8 +1398,7 @@ class OperationsPanel(ttk.Frame):
                 skipped_invalid += 1
                 continue
 
-            correct_real_m = job.height_mm / 1000.0
-            if abs(job.real_m - correct_real_m) > 0.001:
+            if job.real_mm <= 0:
                 skipped_invalid += 1
                 continue
 
@@ -1583,13 +1582,7 @@ class OperationsPanel(ttk.Frame):
             row=0, column=1, sticky="w", columnspan=3, pady=(0, 8)
         )
 
-        ttk.Label(frame, text="Documento").grid(row=1, column=0, sticky="w")
-        var_document = tk.StringVar(value=job.document)
-        ttk.Entry(frame, textvariable=var_document, width=64).grid(
-            row=1, column=1, columnspan=3, sticky="ew", pady=2
-        )
-
-        ttk.Label(frame, text="Tecido").grid(row=2, column=0, sticky="w")
+        ttk.Label(frame, text="Tecido").grid(row=1, column=0, sticky="w")
         var_fabric = tk.StringVar(value=job.fabric)
         fabric_combo = ttk.Combobox(
             frame,
@@ -1598,19 +1591,19 @@ class OperationsPanel(ttk.Frame):
             width=28,
             values=self._fabric_options(),
         )
-        fabric_combo.grid(row=2, column=1, sticky="w", pady=2)
+        fabric_combo.grid(row=1, column=1, sticky="w", pady=2)
         ttk.Button(frame, text="Tecidos...", command=self.open_fabrics_dialog).grid(
-            row=2, column=2, sticky="w", padx=(6, 0), pady=2
+            row=1, column=2, sticky="w", padx=(6, 0), pady=2
         )
         ttk.Button(
             frame,
             text="Recalcular tecido",
             command=lambda: var_fabric.set(
-                infer_fabric_from_text(var_document.get(), self.fabrics_map)
+                infer_fabric_from_text(job.document, self.fabrics_map)
             ),
-        ).grid(row=2, column=3, sticky="w", padx=(6, 0), pady=2)
+        ).grid(row=1, column=3, sticky="w", padx=(6, 0), pady=2)
 
-        ttk.Label(frame, text="Status").grid(row=3, column=0, sticky="w")
+        ttk.Label(frame, text="Status").grid(row=2, column=0, sticky="w")
         var_status = tk.StringVar(value=job.print_status)
         ttk.Combobox(
             frame,
@@ -1618,58 +1611,55 @@ class OperationsPanel(ttk.Frame):
             state="readonly",
             width=24,
             values=STATUS_OPTIONS,
-        ).grid(row=3, column=1, sticky="w", pady=2)
+        ).grid(row=2, column=1, sticky="w", pady=2)
 
-        ttk.Label(frame, text="Comprimento esperado (mm)").grid(row=4, column=0, sticky="w")
-        expected_text = f"{job.expected_mm:.1f}" if job.expected_mm is not None else "Indisponível"
-        ttk.Label(frame, text=expected_text).grid(row=4, column=1, sticky="w", pady=2)
-
-        ttk.Label(frame, text="% impresso").grid(row=4, column=2, sticky="w", padx=(12, 0))
+        expected_text = (
+            fmt_m((job.expected_mm or 0.0) / 1000.0)
+            if job.expected_mm is not None and float(job.expected_mm or 0.0) > 0
+            else "indisponível"
+        )
+        printed_text = fmt_m(job.real_m)
         percent_text = self._job_percent_text(job)
+        percent_display = percent_text if percent_text != "—" else "indisponível"
+
+        ttk.Label(frame, text="Resumo da impressão").grid(row=3, column=0, sticky="nw", pady=(8, 0))
         ttk.Label(
             frame,
-            text=percent_text if percent_text != "—" else "Indisponível (sem esperado)",
-        ).grid(row=4, column=3, sticky="w")
+            text=f"Tamanho do arquivo: {expected_text} · {percent_display} impresso · {printed_text} impressos",
+            justify="left",
+        ).grid(row=3, column=1, columnspan=3, sticky="w", pady=(8, 0))
 
-        ttk.Label(frame, text="Detecção automática").grid(row=5, column=0, sticky="nw", pady=(8, 0))
+        ttk.Label(frame, text="Detecção automática").grid(row=4, column=0, sticky="nw", pady=(8, 0))
         auto_desc = job.auto_reason or "Sem alerta automático para esta entrada."
         ttk.Label(
             frame,
             text=f"Tecido detectado: {job.original_fabric}\n{auto_desc}",
             justify="left",
-        ).grid(row=5, column=1, columnspan=3, sticky="w", pady=(8, 0))
+        ).grid(row=4, column=1, columnspan=3, sticky="w", pady=(8, 0))
 
-        ttk.Label(frame, text="Observação").grid(row=6, column=0, sticky="nw", pady=(8, 0))
+        ttk.Label(frame, text="Observação").grid(row=5, column=0, sticky="nw", pady=(8, 0))
         txt_note = tk.Text(frame, width=52, height=4)
-        txt_note.grid(row=6, column=1, columnspan=3, sticky="ew", pady=(8, 0))
+        txt_note.grid(row=5, column=1, columnspan=3, sticky="ew", pady=(8, 0))
         txt_note.insert("1.0", job.review_note or "")
 
         buttons = ttk.Frame(frame)
-        buttons.grid(row=7, column=0, columnspan=4, sticky="e", pady=(12, 0))
+        buttons.grid(row=6, column=0, columnspan=4, sticky="e", pady=(12, 0))
 
         def save_edit():
-            document = var_document.get().strip()
             fabric = var_fabric.get().strip() or "DESCONHECIDO"
             status = var_status.get().strip()
             note = txt_note.get("1.0", "end").strip()
 
-            if not document:
-                messagebox.showerror(
-                    "Editar entrada", "Documento não pode ficar vazio.", parent=win
-                )
-                return
             if status not in STATUS_OPTIONS:
                 messagebox.showerror("Editar entrada", "Status inválido.", parent=win)
                 return
 
-            job.document = document
             job.fabric = fabric
             job.print_status = status
             job.review_note = note
             job.original_fabric = infer_fabric_from_text(job.document, self.fabrics_map)
 
             self.job_overrides[_job_override_key(job.src_file)] = {
-                "document": job.document,
                 "fabric": job.fabric,
                 "print_status": job.print_status,
                 "review_note": job.review_note,

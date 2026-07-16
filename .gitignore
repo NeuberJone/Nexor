@@ -12,6 +12,9 @@ venv/
 # Build artifacts
 build/
 dist/
+[Bb]in/
+[Oo]bj/
+.vs/
 *.spec
 
 # IDEs

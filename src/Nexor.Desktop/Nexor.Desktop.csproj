@@ -1,0 +1,28 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <AssemblyName>Nexor</AssemblyName>
+    <RootNamespace>Nexor.Desktop</RootNamespace>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <Platforms>x64</Platforms>
+    <TrialEdition Condition="'$(TrialEdition)' == ''">false</TrialEdition>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(TrialEdition)' == 'true'">
+    <DefineConstants>$(DefineConstants);TRIAL_EDITION</DefineConstants>
+    <AssemblyName>Nexor-Trial</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Nexor.Application\Nexor.Application.csproj" />
+    <ProjectReference Include="..\Nexor.Domain\Nexor.Domain.csproj" />
+    <ProjectReference Include="..\Nexor.Infrastructure\Nexor.Infrastructure.csproj" />
+    <ProjectReference Include="..\Nexor.Reporting\Nexor.Reporting.csproj" />
+  </ItemGroup>
+
+</Project>

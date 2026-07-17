@@ -32,4 +32,20 @@ public sealed class InfrastructureTests
   }
   finally { if(File.Exists(path)) File.Delete(path); }
  }
+ [Fact] public void ListsRollWhoseFractionalItemsSumToRealNumber()
+ {
+  var path=Path.Combine(Path.GetTempPath(),$"nexor-{Guid.NewGuid():N}.db");
+  try
+  {
+   var context=new SqliteContext(path); var logs=new SqliteProductionLogRepository(context); var rolls=new SqliteRollRepository(context);
+   var rollId=rolls.Insert(new Roll{Name="M1_REAL_TOTAL",Machine="M1",Fabric="MIX"});
+   foreach(var meters in new[]{8.567,2.985,9.985,0.361,0.855,10.005,8.501,1.277,2.277,0.848,0.085})
+   {
+    var logId=logs.Insert(new ProductionLog{SourcePath=$"{Guid.NewGuid():N}.txt",SourceName="x.txt",Machine="M1",Document="PEDIDO",Fabric="MIX",HeightMm=meters*1000,Fingerprint=Guid.NewGuid().ToString("N")});
+    rolls.AddItem(new RollItem{RollId=rollId,ProductionLogId=logId,Document="PEDIDO",Machine="M1",Fabric="MIX",EffectiveMeters=meters});
+   }
+   var listed=Assert.Single(rolls.List("M1","REAL_TOTAL",10)); Assert.Equal(11,listed.ItemCount); Assert.Equal(45.746,listed.TotalMeters,3);
+  }
+  finally { if(File.Exists(path)) File.Delete(path); }
+ }
 }

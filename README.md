@@ -1,75 +1,623 @@
 # Nexor
 
-Nexor é um aplicativo desktop local-first para operação de produção têxtil. A implementação oficial está sendo reconstruída em C# com .NET 8, WPF, Windows x64 e SQLite.
+> Plataforma desktop local-first para operação, rastreabilidade e auditoria de produção têxtil.
 
-Versão atual: **0.2.6** — seleção ativa e inativa com contraste correto.
+![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011-0078D6?style=for-the-badge&logo=windows)
+![.NET](https://img.shields.io/badge/.NET-8.0-512BD4?style=for-the-badge&logo=dotnet)
+![WPF](https://img.shields.io/badge/UI-WPF-5C2D91?style=for-the-badge)
+![SQLite](https://img.shields.io/badge/Database-SQLite-003B57?style=for-the-badge&logo=sqlite)
+![Version](https://img.shields.io/badge/version-0.2.8-16A34A?style=for-the-badge)
 
-## Estado atual
+---
 
-Já implementado:
+## Sobre
 
-- solução separada em Desktop, Application, Domain, Infrastructure e Reporting;
-- shell WPF com sidebar, topbar, conteúdo, status e navegação MVVM para Home, Operação, Rolos, Configurações e Sobre;
-- temas Nexor Dark, Nexor Light e SISBolt em `ResourceDictionary`, com troca imediata e preferência persistida;
-- entidades iniciais de logs, rolos, itens e eventos;
-- parser inicial para logs no formato de seções do PX, incluindo `EndTime`, documento, `HeightMM` e `VPositionMM`;
-- cálculo de metragem real somente por `HeightMM / 1000`;
-- ordenação por última impressão, agrupamento consecutivo por tecido e prevenção de duplicidade por SHA-256;
-- SQLite com criação automática, versão explícita de schema e repositórios;
-- testes automatizados de domínio, aplicação, parsing e persistência.
+O **Nexor** é um sistema desktop desenvolvido para centralizar e organizar o fluxo operacional da produção têxtil.
 
-Planejado:
+O projeto nasceu com foco em substituir processos manuais e ferramentas isoladas por um ambiente único, permitindo importar registros de impressão, organizar informações operacionais, fechar rolos de produção, gerar relatórios e consultar todo o histórico posteriormente.
 
-- importação por arquivo, pasta e arrastar-e-soltar na interface;
-- fluxo completo de fechamento de rolos;
-- consulta detalhada, filtros e reexportação;
-- PDF completo/resumido e JPG espelhado;
-- telas funcionais de configurações e refinamento de temas;
-- instalador validado em ambiente limpo.
+A aplicação é desenvolvida em **C#**, **.NET 8**, **WPF** e **SQLite**, utilizando uma arquitetura em camadas voltada para crescimento de longo prazo.
 
-Planejamento, Estoque, Cadastros e Analytics permanecem fora da interface desta etapa; entrarão somente quando houver casos de uso reais.
+---
 
-## Referências
+## Objetivos
 
-O núcleo funcional é baseado nas regras observadas no PXPrintLogs e PXSearchOrders do Projeto Jocasta. O ListForge serve somente como referência de composição visual; nenhum recurso de listas, Trial, licença ou texto daquele produto integra o Nexor.
+O Nexor foi projetado para:
 
-O código Python anterior está preservado temporariamente, com sua estrutura original, em [`legacy/Nexor-Python-Legacy`](legacy/Nexor-Python-Legacy). Ele é referência histórica e não compõe a aplicação oficial.
+- importar registros de impressão;
+- evitar duplicidades;
+- interpretar dados operacionais;
+- organizar itens por ordem de impressão;
+- calcular metragem real;
+- montar e fechar rolos;
+- gerar relatórios PDF;
+- gerar imagens espelhadas para impressão;
+- armazenar histórico local;
+- localizar rapidamente qualquer produção anterior;
+- permitir reexportação de documentos;
+- servir como base para planejamento, estoque e analytics futuramente.
 
-## Estrutura
+---
+
+# Estado do Projeto
+
+Versão atual:
+
+**0.2.8**
+
+## Implementado
+
+- Arquitetura em C#
+- .NET 8
+- WPF
+- SQLite
+- Navegação principal
+- Sidebar
+- Topbar
+- Barra de Status
+- Temas
+- Persistência das configurações
+- Estrutura de domínio
+- Estrutura da aplicação
+- Estrutura de infraestrutura
+- Parser inicial
+- Fingerprint SHA-256
+- Banco SQLite
+- Testes iniciais
+- Estrutura de build
+- Estrutura do instalador
+
+## Em desenvolvimento
+
+- Importação pela interface
+- Operação
+- Fechamento de rolos
+- Consulta de rolos
+- Reexportação
+- PDF
+- JPG Mirror
+- Auditoria
+- Melhorias de UX
+
+## Planejado
+
+- Cadastros
+- Planejamento
+- Estoque
+- Analytics
+- Sincronização
+- Backup
+- Multiestação
+
+---
+
+# Fluxo Operacional
+
+O fluxo principal do Nexor será:
 
 ```text
-src/       projetos da aplicação
-tests/     testes automatizados
-docs/      especificações e decisões técnicas
-installer/ definição do instalador
-legacy/    implementação Python preservada
-dist/      artefatos separados por versão
+Importar registros
+
+↓
+
+Interpretar registros
+
+↓
+
+Validar
+
+↓
+
+Eliminar duplicidades
+
+↓
+
+Selecionar itens
+
+↓
+
+Montar o rolo
+
+↓
+
+Revisar
+
+↓
+
+Fechar
+
+↓
+
+Salvar
+
+↓
+
+Exportar
+
+↓
+
+Consultar
+
+↓
+
+Reexportar
 ```
 
-## Executar
+---
 
-Requer Windows e SDK do .NET 8:
+# Regras Operacionais
+
+## Ordenação
+
+Os registros são organizados pelo horário de término (`EndTime`).
+
+O último item impresso aparece primeiro.
+
+---
+
+## Agrupamento
+
+O agrupamento é feito por blocos consecutivos de tecido.
+
+Caso outro tecido apareça entre dois registros iguais, inicia-se um novo bloco.
+
+---
+
+## Metragem
+
+A metragem utilizada é:
+
+```text
+HeightMM / 1000
+```
+
+O campo `VPositionMM` representa apenas deslocamento.
+
+---
+
+## Duplicidade
+
+Cada registro recebe um fingerprint SHA-256.
+
+Arquivos já importados não são processados novamente.
+
+---
+
+## Persistência
+
+Após o fechamento do rolo:
+
+- composição fica congelada;
+- histórico permanece disponível;
+- exportações futuras utilizam os dados persistidos.
+
+---
+
+# Arquitetura
+
+```
+Nexor.Desktop
+
+↓
+
+Nexor.Application
+
+↓
+
+Nexor.Domain
+
+↑
+
+Nexor.Infrastructure
+
+↓
+
+SQLite
+
+↓
+
+Nexor.Reporting
+```
+
+---
+
+## Camadas
+
+### Nexor.Desktop
+
+Responsável pela interface WPF.
+
+Contém:
+
+- Views
+- ViewModels
+- Temas
+- Navegação
+- Componentes
+- Dialogs
+
+---
+
+### Nexor.Application
+
+Responsável pelos casos de uso.
+
+Contém:
+
+- Importação
+- Operação
+- Fechamento
+- Consulta
+- Exportação
+- Configurações
+
+---
+
+### Nexor.Domain
+
+Responsável pelas regras de negócio.
+
+Contém:
+
+- Entidades
+- Value Objects
+- Regras
+- Estados
+- Interfaces
+
+---
+
+### Nexor.Infrastructure
+
+Responsável por:
+
+- SQLite
+- Parsing
+- Sistema de Arquivos
+- Logging
+- Configurações
+- Repositórios
+
+---
+
+### Nexor.Reporting
+
+Responsável por:
+
+- PDF
+- JPG Mirror
+- Templates
+- Relatórios
+
+---
+
+# Estrutura do Projeto
+
+```text
+Nexor
+│
+├── docs
+├── installer
+├── legacy
+├── dist
+├── src
+│   ├── Nexor.Desktop
+│   ├── Nexor.Application
+│   ├── Nexor.Domain
+│   ├── Nexor.Infrastructure
+│   └── Nexor.Reporting
+│
+├── tests
+│
+├── README.md
+├── CHANGELOG.md
+├── LICENSE.md
+└── Nexor.sln
+```
+
+---
+
+# Referências
+
+## Projeto Jocasta
+
+O Nexor utiliza como referência funcional:
+
+- PXPrintLogs
+- PXSearchOrders
+
+As regras de negócio são inspiradas nesses módulos.
+
+A arquitetura Python não é reutilizada.
+
+---
+
+## ListForge
+
+O ListForge é utilizado apenas como referência visual.
+
+Foram aproveitados conceitos como:
+
+- Sidebar
+- Topbar
+- Barra de Status
+- Organização visual
+- Temas
+- Experiência desktop
+
+A lógica de negócio permanece totalmente independente.
+
+---
+
+# Screenshots
+
+As imagens da interface serão adicionadas após estabilização da versão inicial.
+
+Estrutura prevista:
+
+```text
+docs/screenshots/
+
+01-home.png
+
+02-operacao.png
+
+03-rolos.png
+
+04-configuracoes.png
+
+05-sobre.png
+```
+
+---
+
+# Banco de Dados
+
+O Nexor utiliza SQLite.
+
+O banco é criado automaticamente na primeira execução.
+
+Diretório padrão:
+
+```text
+%LOCALAPPDATA%\Nexor
+```
+
+---
+
+# Temas
+
+Temas disponíveis:
+
+- Nexor Dark
+- Nexor Light
+- SISBolt
+
+Os temas utilizam ResourceDictionary.
+
+---
+
+# Requisitos
+
+- Windows 10 ou superior
+- Windows x64
+- .NET 8 SDK (desenvolvimento)
+- Visual Studio 2022 ou Rider
+
+As versões distribuídas serão **Self-Contained**.
+
+---
+
+# Executando
+
+Restaurar dependências:
 
 ```powershell
-dotnet restore Nexor.sln
-dotnet run --project src/Nexor.Desktop/Nexor.Desktop.csproj
+dotnet restore
 ```
 
-O banco é criado automaticamente em `%LOCALAPPDATA%/Nexor/nexor.db` no primeiro início. Nenhum banco do Jocasta é alterado.
-
-## Testes
+Executar:
 
 ```powershell
-dotnet build Nexor.sln -c Release
-dotnet test Nexor.sln -c Release
+dotnet run --project src/Nexor.Desktop
 ```
 
-## Screenshots
+Build:
 
-Ainda não há screenshots rastreados que representem fielmente a nova interface WPF. As imagens serão adicionadas em `docs/screenshots/` após a validação visual das telas; o README não aponta para arquivos inexistentes nem reutiliza imagens do legado ou do ListForge.
+```powershell
+dotnet build -c Release
+```
 
-## Distribuição
+Testes:
 
-Os artefatos da versão 0.2.6 permanecem em `dist/0.2.6/`, sem sobrescrever versões anteriores. A edição Trial é um build separado, identificado na interface, com avaliação local de 30 dias.
+```powershell
+dotnet test
+```
 
-Consulte também [arquitetura](docs/architecture.md), [especificação funcional](docs/Functional_Spec_Operational_Core.md), [UI/UX](docs/UI_UX_Specification.md) e [instalação](docs/installation.md).
+---
+
+# Distribuição
+
+Os artefatos ficam organizados por versão.
+
+```text
+dist/
+
+└── 0.2.8
+    ├── onefile
+    ├── trial
+    ├── installable
+    └── installer
+```
+
+Exemplo:
+
+```
+Nexor-v0.2.8.exe
+
+Nexor-Trial-v0.2.8.exe
+
+Nexor-Setup-v0.2.8.exe
+```
+
+---
+
+# Documentação
+
+A documentação completa encontra-se em:
+
+- Architecture
+- Roadmap
+- Data Model
+- Functional Specification
+- UI/UX Specification
+- Wireframe Specification
+- Installation Guide
+
+---
+
+# Roadmap
+
+## Fase 1
+
+Base Operacional
+
+- Parser
+- Domínio
+- SQLite
+- Importação
+
+---
+
+## Fase 2
+
+Operação
+
+- Fechamento
+- PDF
+- JPG Mirror
+
+---
+
+## Fase 3
+
+Consulta
+
+- Pesquisa
+- Auditoria
+- Reexportação
+
+---
+
+## Fase 4
+
+Cadastros
+
+- Operadores
+- Máquinas
+- Tecidos
+- Aliases
+
+---
+
+## Fase 5
+
+Planejamento
+
+---
+
+## Fase 6
+
+Estoque
+
+---
+
+## Fase 7
+
+Analytics
+
+---
+
+## Fase 8
+
+Arquitetura Híbrida
+
+---
+
+# Princípios
+
+O Nexor segue cinco princípios fundamentais:
+
+- Local-First
+- Simplicidade
+- Rastreabilidade
+- Domínio antes da Interface
+- Crescimento Controlado
+
+---
+
+# Implementação Anterior
+
+A implementação Python permanece preservada temporariamente em:
+
+```text
+legacy/Nexor-Python-Legacy
+```
+
+Ela é utilizada apenas como referência durante a migração.
+
+---
+
+# Licença
+
+O Nexor é um software proprietário.
+
+Consulte:
+
+**LICENSE.md**
+
+---
+
+# Changelog
+
+Histórico completo de alterações:
+
+**CHANGELOG.md**
+
+---
+
+# Autor
+
+**Neuber Jone Avelar Queiroz**
+
+---
+
+# Status
+
+🚧 Desenvolvimento ativo
+
+Prioridade atual:
+
+```text
+Importar
+
+↓
+
+Montar
+
+↓
+
+Fechar
+
+↓
+
+Exportar
+
+↓
+
+Consultar
+
+↓
+
+Reexportar
+```

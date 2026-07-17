@@ -1,746 +1,1318 @@
-# Nexor — UI/UX Specification
+# Nexor — Especificação de UI/UX
 
 ## 1. Objetivo
 
-Este documento define a direção de interface e experiência do usuário para o Nexor.
+Este documento define os princípios, padrões visuais, fluxos e comportamentos da interface do **Nexor**.
 
-O objetivo não é apenas desenhar telas bonitas, mas estruturar uma interface operacional que seja:
+A aplicação é desenvolvida em:
 
-* intuitiva
-* rápida
-* confiável
-* fácil de aprender
-* consistente com o domínio do produto
-* adequada para uso diário em contexto real de produção
+- C#;
+- .NET 8;
+- WPF;
+- Windows x64;
+- arquitetura MVVM.
 
-A UI do Nexor deve refletir o modelo do sistema, priorizando o fluxo operacional antes de qualquer complexidade visual desnecessária.
+A interface deve priorizar:
 
----
+- rapidez operacional;
+- clareza;
+- baixa chance de erro;
+- rastreabilidade;
+- consistência visual;
+- uso recorrente durante a produção.
 
-## 2. Princípios de UI/UX
-
-### 2.1 Operação primeiro
-
-A interface deve priorizar as tarefas mais frequentes e mais críticas da rotina.
-
-### 2.2 Uma ação principal por tela
-
-Cada tela precisa ter um objetivo dominante claro.
-
-### 2.3 Menos fricção, mais confirmação
-
-O sistema deve reduzir etapas desnecessárias, mas proteger ações sensíveis com validação e confirmação.
-
-### 2.4 Informação visível
-
-Status, totais, alertas e contexto não devem ficar escondidos.
-
-### 2.5 Linguagem operacional
-
-Os nomes, botões e mensagens devem usar termos diretos e compreensíveis no contexto de produção.
-
-### 2.6 Consistência visual
-
-A mesma lógica visual deve se repetir em todas as áreas do sistema.
-
-### 2.7 Clareza acima de sofisticação
-
-Uma UI elegante é desejável, mas nunca à custa da compreensão.
-
-### 2.8 Local-first na experiência
-
-A experiência principal deve ser sólida e completa mesmo offline.
+O layout utiliza o **ListForge apenas como referência visual**, sem copiar suas regras de negócio, textos ou funcionalidades.
 
 ---
 
-## 3. Premissas de uso
+# 2. Direção da experiência
 
-O Nexor é um sistema operacional de uso recorrente.
+O Nexor deve transmitir:
 
-Isso implica que a interface precisa funcionar bem para:
+- confiabilidade;
+- organização;
+- estabilidade;
+- controle;
+- clareza;
+- sensação de ferramenta profissional.
 
-* uso repetitivo ao longo do dia
-* consulta rápida
-* baixa tolerância a erro operacional
-* usuários com diferentes níveis de familiaridade com tecnologia
-* cenários com pressão de tempo
+A interface não deve parecer:
 
-Portanto, a experiência deve favorecer:
-
-* leitura rápida
-* ações claras
-* pouco esforço cognitivo
-* boa hierarquia visual
-* baixa dependência de treinamento complexo
+- excessivamente decorativa;
+- um painel genérico;
+- um conjunto de scripts;
+- um sistema ERP complexo;
+- uma cópia visual literal do ListForge.
 
 ---
 
-## 4. Perfis de usuário
+# 3. Princípios de UI/UX
 
-A UI deve considerar, no mínimo, três perfis principais.
+## 3.1 Operação primeiro
+
+As tarefas mais frequentes devem exigir poucos passos.
+
+A interface deve favorecer o fluxo:
+
+```text
+Importar
+→ selecionar
+→ revisar
+→ fechar
+→ exportar
+```
+
+---
+
+## 3.2 Uma ação principal por tela
+
+Cada tela deve possuir uma função dominante.
+
+Exemplos:
+
+- Home: mostrar a situação atual;
+- Operação: montar o rolo;
+- Rolos: localizar e consultar;
+- Configurações: ajustar o sistema;
+- Sobre: informar versão e suporte.
+
+---
+
+## 3.3 Estados visíveis
+
+O usuário deve perceber claramente quando um item está:
+
+- disponível;
+- selecionado;
+- inválido;
+- duplicado;
+- suspeito;
+- já vinculado;
+- fechado;
+- exportado.
+
+Nenhum estado importante deve depender somente de cor.
+
+Também devem ser usados:
+
+- textos;
+- badges;
+- ícones;
+- tooltips;
+- mensagens;
+- contraste.
+
+---
+
+## 3.4 Redução de erros
+
+A interface deve impedir ou dificultar:
+
+- fechar rolo vazio;
+- misturar máquinas sem aviso;
+- selecionar item inválido;
+- reutilizar item já vinculado;
+- sobrescrever exportações;
+- perder seleção sem confirmação;
+- fechar sem revisar dados essenciais.
+
+---
+
+## 3.5 Linguagem operacional
+
+Evitar termos excessivamente técnicos.
+
+O termo `Job` não deve aparecer em textos visíveis.
+
+Usar:
+
+- item;
+- registro;
+- impressão;
+- arquivo;
+- pedido;
+- processamento;
+- rolo.
+
+---
+
+## 3.6 Local-first
+
+A interface não deve aparentar dependência de internet.
+
+Falhas de rede não devem impedir o fluxo principal.
+
+Recursos online futuros deverão ser apresentados como complementares.
+
+---
+
+# 4. Perfis de usuário
 
 ## 4.1 Operador
 
-### Objetivo
+### Objetivos
 
-Registrar e fechar a produção do dia de forma simples e segura.
+- importar registros;
+- identificar itens;
+- selecionar o rolo atual;
+- revisar;
+- fechar;
+- exportar.
 
-### Necessidades principais
+### Necessidades
 
-* ver logs pendentes
-* montar o rolo atual
-* revisar totais
-* fechar rolo
-* exportar relatórios
-* identificar rapidamente o que está faltando ou pendente
+- ações rápidas;
+- poucos filtros;
+- totais visíveis;
+- mensagens simples;
+- baixa chance de erro.
 
-### O que evitar para esse perfil
+### Evitar
 
-* excesso de opções administrativas
-* telas confusas com muitos filtros avançados
-* excesso de dados históricos na tela principal
-
----
-
-## 4.2 Gestão / conferência
-
-### Objetivo
-
-Consultar histórico, revisar registros e acompanhar situação operacional.
-
-### Necessidades principais
-
-* buscar rolos registrados
-* filtrar por período, tecido, máquina, operador e status
-* abrir detalhes do rolo
-* conferir composição
-* reexportar relatórios
-* identificar inconsistências
+- opções administrativas em excesso;
+- linguagem técnica;
+- muitos níveis de navegação;
+- informações históricas desnecessárias durante a operação.
 
 ---
 
-## 4.3 Administração
+## 4.2 Conferente
 
-### Objetivo
+### Objetivos
 
-Configurar e manter a base do sistema.
+- localizar um rolo;
+- conferir composição;
+- consultar eventos;
+- verificar exportações;
+- reexportar.
 
-### Necessidades principais
+### Necessidades
 
-* cadastrar operadores
-* cadastrar máquinas
-* cadastrar tecidos
-* manter aliases
-* ajustar parâmetros
-* configurar pastas
-* acessar áreas de estoque e parâmetros mais estruturais
-
-### O que evitar para esse perfil
-
-* esconder configurações críticas demais
-* exigir caminhos indiretos para manutenção do sistema
+- busca rápida;
+- filtros;
+- detalhes completos;
+- histórico;
+- acesso ao caminho dos arquivos.
 
 ---
 
-## 5. Navegação principal
+## 4.3 Administrador
 
-A navegação precisa refletir a hierarquia real do produto.
+### Objetivos
 
-## 5.1 Estrutura principal recomendada
+- configurar pastas;
+- definir preferências;
+- conferir versão;
+- manter parâmetros;
+- diagnosticar problemas.
 
-### Seções principais
+### Necessidades
 
-* **Home**
-* **Operação**
-* **Rolos**
-* **Planejamento**
-* **Estoque**
-* **Cadastros**
-* **Configurações**
-
-### Observação crítica
-
-A navegação não deve começar por “módulos” genéricos. Ela deve começar por tarefas e domínios compreensíveis.
+- formulários claros;
+- validação;
+- informações técnicas acessíveis;
+- restauração de padrões.
 
 ---
 
-## 5.2 Lógica da navegação
+# 5. Estrutura visual principal
 
-### Home
+O layout da aplicação deve seguir esta composição:
 
-Ponto de entrada e visão do momento atual.
+```text
+┌─────────────────┬────────────────────────────────────┐
+│                 │ Topbar                             │
+│                 ├────────────────────────────────────┤
+│ Sidebar         │                                    │
+│                 │ Conteúdo principal                 │
+│                 │                                    │
+│                 ├────────────────────────────────────┤
+│                 │ Barra de status                    │
+└─────────────────┴────────────────────────────────────┘
+```
+
+---
+
+# 6. Sidebar
+
+## 6.1 Objetivo
+
+Oferecer navegação principal previsível.
+
+## 6.2 Itens iniciais
+
+- Home;
+- Operação;
+- Rolos;
+- Configurações;
+- Sobre.
+
+## 6.3 Itens futuros
+
+- Cadastros;
+- Planejamento;
+- Estoque;
+- Analytics.
+
+Itens futuros não devem aparecer como ativos antes de possuírem funcionalidade real.
+
+## 6.4 Comportamento
+
+- item atual deve ficar claramente destacado;
+- hover deve ser visível;
+- ícone e texto devem permanecer alinhados;
+- navegação não deve recarregar dados desnecessariamente;
+- mudança de tela deve preservar contexto quando apropriado.
+
+## 6.5 Largura
+
+Referência inicial:
+
+```text
+210 px
+```
+
+Pode ser ajustada conforme testes de legibilidade.
+
+---
+
+# 7. Topbar
+
+## 7.1 Conteúdo
+
+A topbar deve apresentar:
+
+- título da tela;
+- subtítulo ou contexto curto, quando necessário;
+- ações secundárias;
+- indicadores de carregamento;
+- botão contextual quando fizer sentido.
+
+## 7.2 Exemplos
 
 ### Operação
 
-Fluxo do dia: logs, montagem e fechamento.
+```text
+Operação
+18 registros disponíveis
+```
+
+Ações:
+
+- Atualizar;
+- Importar;
+- Limpar filtros.
 
 ### Rolos
 
-Consulta histórica, revisão e reexportação.
+```text
+Rolos
+Consulta histórica
+```
 
-### Planejamento
+Ações:
 
-Fila futura e preparação da produção.
-
-### Estoque
-
-Disponibilidade de tecido e materiais.
-
-### Cadastros
-
-Operadores, máquinas, tecidos e aliases.
-
-### Configurações
-
-Pastas, parâmetros, comportamento do sistema e recursos futuros.
+- Atualizar;
+- Limpar filtros.
 
 ---
 
-## 6. Estrutura da Home
-
-A Home deve ser operacional, não decorativa.
-
-Ela deve responder rapidamente a perguntas como:
-
-* o que chegou de novo?
-* o que está pendente?
-* o que foi fechado por último?
-* há algo suspeito ou travado?
-* qual é a ação principal agora?
-
-## 6.1 Blocos recomendados
-
-### Bloco 1 — Logs novos encontrados
-
-Mostra quantidade e acesso rápido.
-
-### Bloco 2 — Rolos em aberto
-
-Mostra quantos estão em andamento ou aguardando fechamento.
-
-### Bloco 3 — Último rolo fechado
-
-Mostra identificação, horário e atalho para detalhe.
-
-### Bloco 4 — Alertas / suspeitas
-
-Mostra itens que exigem revisão.
-
-### Bloco 5 — Atalho principal
-
-Botão de destaque para:
-**Novo fechamento de rolo**
-
-### Bloco 6 — Acesso rápido
-
-Atalhos para:
-
-* consultar rolos
-* planejamento
-* estoque
-* cadastros
-
----
-
-## 6.2 Regra visual da Home
-
-A ação principal da Home deve ser óbvia em poucos segundos.
-
-Se houver muitos blocos do mesmo peso visual, a Home perde direção.
-
----
-
-## 7. Tela de Operação
-
-A tela de Operação é o centro da experiência do operador.
-
-Ela precisa unir clareza, velocidade e segurança.
-
-## 7.1 Objetivo da tela
-
-Transformar logs/jobs disponíveis em um rolo estruturado e fechável.
-
-## 7.2 Estrutura recomendada
-
-### Área A — Lista principal de itens disponíveis
-
-Exibe logs/jobs elegíveis.
-
-Informações úteis por linha:
-
-* nome do job
-* máquina
-* tecido
-* data/hora
-* metragem relevante
-* status
-
-### Área B — Filtros rápidos
-
-Filtros simples e visíveis:
-
-* máquina
-* tecido
-* status
-* período
-* texto livre
-
-### Área C — Painel lateral do rolo em montagem
-
-Resumo vivo com:
-
-* quantidade de itens selecionados
-* total em metros
-* máquina predominante ou escolhida
-* tecido
-* status da montagem
-* observações rápidas
-
-### Área D — Ações principais
-
-* selecionar / remover item
-* limpar seleção
-* revisar rolo
-* avançar para fechamento
-
----
-
-## 7.3 Estados importantes nessa tela
-
-O usuário deve perceber claramente se um item está:
-
-* novo
-* pronto para uso
-* suspeito
-* já vinculado
-* ignorado
-* inválido
-
-Esses estados não podem depender só de cor. Também devem ter texto ou rótulo visível.
-
----
-
-## 8. Tela de Fechamento do Rolo
-
-Essa tela deve funcionar como confirmação operacional final.
+# 8. Barra de status
 
 ## 8.1 Objetivo
 
-Confirmar metadados, revisar totais e fechar o rolo com segurança.
+Exibir retorno discreto sobre ações recentes.
 
-## 8.2 Estrutura recomendada
+Exemplos:
 
-### Resumo superior
+```text
+12 arquivos importados.
+```
 
-* quantidade de jobs
-* total estimado/consumido
-* informações principais do rolo
+```text
+Tema alterado para Nexor Dark.
+```
 
-### Seção de metadados
+```text
+Rolo M1_16-07-2026_153045 fechado com sucesso.
+```
 
-Campos como:
+## 8.2 Regras
 
-* identificação do rolo
-* máquina
-* tecido
-* operador
-* observações
-
-### Seção de revisão
-
-Lista resumida dos itens vinculados.
-
-### Ações finais
-
-* voltar para montagem
-* confirmar fechamento
-* fechar e exportar
+- mensagens curtas;
+- sem excesso de detalhes técnicos;
+- erros graves devem usar modal ou painel próprio;
+- mensagens temporárias podem desaparecer após alguns segundos;
+- informações importantes devem permanecer acessíveis em logs ou detalhes.
 
 ---
 
-## 8.3 Regra de UX
-
-O fechamento não deve parecer irreversível sem aviso.
-Se o sistema impedir edição posterior, isso precisa ficar claro.
-
----
-
-## 9. Tela de Rolos / Consulta Histórica
-
-Esta tela é inspirada conceitualmente na lógica do SearchOrders, mas adaptada ao domínio do Nexor.
+# 9. Home
 
 ## 9.1 Objetivo
 
-Encontrar, abrir, revisar e reexportar registros já fechados.
+Mostrar rapidamente o que exige atenção.
 
-## 9.2 Estrutura recomendada
+## 9.2 Conteúdo recomendado
 
-### Área A — Filtros
+### Cards principais
 
-* período
-* máquina
-* tecido
-* operador
-* status
-* busca textual
+- Registros disponíveis;
+- Rolos fechados hoje;
+- Último rolo;
+- Alertas;
+- Importações recentes.
 
-### Área B — Lista de resultados
+### Ação principal
 
-Cada linha deve mostrar pelo menos:
+```text
+Ir para Operação
+```
 
-* identificação do rolo
-* data
-* máquina
-* tecido
-* operador
-* total em metros
-* status
+### Ações rápidas
 
-### Área C — Painel de detalhes
+- Importar arquivos;
+- Consultar rolos;
+- Abrir configurações.
 
-Ao selecionar um rolo, exibir:
+## 9.3 Regras
 
-* dados gerais
-* jobs vinculados
-* observações
-* exportações disponíveis
-* ações de reexportação
-
-### Área D — Ações contextuais
-
-* abrir detalhe completo
-* reexportar PDF
-* reexportar JPG mirror
-* revisar registro
+- usar dados reais;
+- não exibir métricas fictícias;
+- empty states devem orientar;
+- cards não devem competir visualmente;
+- alertas devem receber destaque proporcional à gravidade.
 
 ---
 
-## 9.3 Regra de UX
-
-A consulta deve ser rápida. O sistema não pode exigir navegação profunda para exibir informações básicas do rolo.
-
----
-
-## 10. Tela de Planejamento
-
-Essa tela deve ser separada da operação diária para não poluir o fluxo principal.
+# 10. Tela Operação
 
 ## 10.1 Objetivo
 
-Organizar a fila futura de produção.
+Permitir importação, seleção e montagem do rolo.
 
-## 10.2 Estrutura recomendada
+## 10.2 Estrutura
 
-### Área A — Itens planejáveis
+```text
+┌──────────────────────────────────┬──────────────────────┐
+│ Filtros                          │ Rolo atual           │
+├──────────────────────────────────┤                      │
+│                                  │ Quantidade           │
+│ Lista de registros               │ Metragem             │
+│                                  │ Máquina              │
+│                                  │ Blocos               │
+│                                  │ Alertas              │
+│                                  │                      │
+│                                  │ Revisar rolo         │
+└──────────────────────────────────┴──────────────────────┘
+```
 
-Lista de jobs ou agrupamentos a planejar.
+## 10.3 Barra de ações
 
-### Área B — Regras e agrupamento
+- Importar arquivos;
+- Importar pasta;
+- Atualizar;
+- Limpar filtros;
+- Limpar seleção.
 
-* tecido
-* ordem
-* capacidade do rolo
-* gaps
-* estimativa
+## 10.4 Filtros
 
-### Área C — Resultado do planejamento
+- máquina;
+- tecido;
+- status;
+- período;
+- busca textual.
 
-Resumo da fila montada, com blocos ou segmentos.
-
-### Área D — Ações
-
-* gerar plano
-* revisar
-* ajustar ordem
-* salvar planejamento
-
----
-
-## 10.3 Regra de UX
-
-Planejamento deve ter uma linguagem visual diferente da operação diária, deixando claro que é preparação, não fechamento real.
-
----
-
-## 11. Tela de Estoque
-
-A tela de estoque deve ser simples e orientada à disponibilidade.
-
-## 11.1 Objetivo
-
-Permitir visualizar e manter materiais utilizáveis no sistema.
-
-## 11.2 Estrutura recomendada
-
-### Lista principal
-
-* tecido
-* tipo do item
-* metragem disponível
-* status
-* observações
-
-### Filtros
-
-* tecido
-* tipo
-* disponibilidade
-* status
-
-### Ações
-
-* novo item
-* editar item
-* registrar ajuste
-* visualizar consumo relacionado
+Os filtros devem ser compactos e próximos da tabela.
 
 ---
 
-## 11.3 Regra de UX
+# 11. Tabela da Operação
 
-Estoque não deve parecer um ERP complexo. A experiência precisa ser enxuta e voltada ao que realmente será utilizado.
+## 11.1 Colunas
 
----
+- seleção;
+- horário;
+- documento;
+- tecido;
+- máquina;
+- metragem;
+- status.
 
-## 12. Tela de Cadastros
+Campos técnicos adicionais podem ficar em:
 
-Cadastros devem ser fáceis de manter, mas não devem atrapalhar a operação.
+- painel de detalhes;
+- tooltip;
+- coluna opcional;
+- modal.
 
-## 12.1 Estrutura recomendada
+## 11.2 Regras visuais
 
-Subseções:
+- seleção clara;
+- linhas alternadas apenas se melhorarem a leitura;
+- cabeçalho fixo;
+- colunas redimensionáveis;
+- texto longo com ellipsis e tooltip;
+- status com badge;
+- suspeitas destacadas sem prejudicar legibilidade;
+- inválidos não selecionáveis;
+- itens já vinculados visualmente diferenciados.
 
-* Operadores
-* Máquinas
-* Tecidos
-* Aliases
+## 11.3 Seleção
 
-Cada subseção deve ter:
-
-* lista
-* busca
-* criação
-* edição
-* status ativo/inativo
-
-## 12.2 Regra de UX
-
-Cadastros devem usar formulários simples, objetivos e previsíveis.
-
----
-
-## 13. Tela de Configurações
-
-## 13.1 Objetivo
-
-Controlar o comportamento estrutural do sistema sem poluir outras áreas.
-
-## 13.2 Itens esperados
-
-* pasta de origem dos logs
-* pasta de exportação PDF
-* pasta de exportação JPG mirror
-* parâmetros gerais
-* comportamento do sistema
-* recursos futuros de backup/sync
-
-## 13.3 Regra de UX
-
-Configurações críticas devem ser claras e seguras. O sistema deve validar caminhos e evitar configurações quebradas.
+- checkbox na primeira coluna;
+- seleção múltipla;
+- clique na linha pode abrir detalhes;
+- checkbox e seleção da linha não devem gerar estados contraditórios;
+- seleção deve atualizar o resumo imediatamente.
 
 ---
 
-## 14. Fluxo principal do operador
+# 12. Painel do rolo atual
 
-### Fluxo esperado
+## 12.1 Conteúdo
 
-1. Abrir o Nexor
-2. Ver a Home com status atual
-3. Entrar em Operação
-4. Ver logs/jobs disponíveis
-5. Selecionar os que pertencem ao rolo atual
-6. Revisar resumo do rolo
-7. Avançar para fechamento
-8. Confirmar metadados
-9. Fechar o rolo
-10. Gerar exportações
+- código provisório;
+- máquina;
+- quantidade de itens;
+- metragem total;
+- quantidade de blocos;
+- tecidos;
+- intervalo de horários;
+- alertas;
+- observações curtas.
 
-### Regra central
+## 12.2 Ações
 
-Esse fluxo deve exigir o menor número possível de decisões desnecessárias.
+- Revisar rolo;
+- Limpar seleção;
+- Atualizar código;
+- Fechar e exportar, após revisão.
 
----
+## 12.3 Estados
 
-## 15. Fluxo principal da gestão / conferência
+### Sem seleção
 
-1. Abrir Rolos
-2. Filtrar período ou contexto
-3. Selecionar registro
-4. Revisar detalhe
-5. Reexportar ou conferir informações
+```text
+Nenhum item selecionado.
+Selecione os registros que pertencem ao rolo atual.
+```
 
-Esse fluxo precisa ser rápido, porque normalmente será usado para resolver dúvidas ou conferências pontuais.
+### Seleção válida
 
----
+Mostrar totais e liberar revisão.
 
-## 16. Fluxo principal da administração
+### Seleção com alerta
 
-1. Abrir Cadastros ou Configurações
-2. Encontrar entidade ou parâmetro desejado
-3. Criar, ajustar ou corrigir
-4. Salvar
-5. Voltar ao contexto principal
-
-Esse fluxo precisa ser previsível e sem caminhos escondidos.
+Mostrar mensagem e orientar correção.
 
 ---
 
-## 17. Componentes visuais essenciais
+# 13. Importação
 
-A UI deve trabalhar com um conjunto pequeno e consistente de componentes.
+## 13.1 Modal ou painel de resultado
 
-### Componentes recomendados
+Após importar, exibir:
 
-* cards de resumo
-* tabelas/listas com filtros
-* painéis laterais de contexto
-* badges de status
-* modais de confirmação
-* formulários curtos
-* toolbars de ação
-* mensagens de validação
-* empty states
-* alertas visíveis
+- arquivos encontrados;
+- importados;
+- duplicados;
+- inválidos;
+- ignorados.
 
-### Regra importante
+Exemplo:
 
-Componentes devem ser reutilizados com a mesma lógica visual e semântica.
+```text
+Importação concluída
 
----
+Importados: 18
+Duplicados: 3
+Inválidos: 1
+```
 
-## 18. Hierarquia visual recomendada
+## 13.2 Drag and drop
 
-### Nível 1 — ação principal
+Durante o arraste:
 
-Botão ou bloco dominante da tela.
+- realçar área;
+- exibir texto de orientação;
+- indicar tipos aceitos;
+- restaurar visual ao sair.
 
-### Nível 2 — contexto e resumo
+Exemplo:
 
-Indicadores, totais, cabeçalhos e status.
-
-### Nível 3 — lista ou conteúdo principal
-
-Onde o usuário trabalha.
-
-### Nível 4 — ações secundárias
-
-Ajustes, reexportações, filtros avançados e utilidades.
-
-Se tudo parecer importante ao mesmo tempo, nada será realmente claro.
+```text
+Solte os arquivos para importar
+```
 
 ---
 
-## 19. Feedback do sistema
+# 14. Revisão e fechamento
 
-O Nexor deve responder com clareza às ações do usuário.
+## 14.1 Objetivo
 
-### Deve informar claramente
+Dar segurança antes da confirmação.
 
-* sucesso da ação
-* erro de validação
-* erro técnico
-* item já usado
-* item suspeito
-* exportação concluída
-* caminho inválido
-* configuração incompleta
+## 14.2 Estrutura
 
-### Regra de linguagem
+### Dados principais
 
-Mensagens devem ser diretas, sem tecnicismo desnecessário para o usuário final.
+- código;
+- máquina;
+- observações.
 
----
+### Resumo
 
-## 20. Estados vazios e erros
+- quantidade;
+- metragem;
+- blocos;
+- tecidos;
+- intervalo de horários.
 
-A experiência precisa considerar ausência de dados e falhas operacionais.
+### Lista resumida
 
-### Exemplos de estados vazios importantes
+- horário;
+- documento;
+- tecido;
+- metragem.
 
-* nenhum log encontrado
-* nenhum rolo registrado no filtro atual
-* nenhum item em estoque
-* nenhum planejamento salvo
+## 14.3 Ações
 
-### Regra
+- Voltar;
+- Cancelar;
+- Confirmar fechamento;
+- Fechar e exportar.
 
-Estados vazios devem orientar a próxima ação, não apenas informar ausência.
+## 14.4 Confirmação
 
----
+A confirmação deve informar claramente que a composição será congelada.
 
-## 21. Regras de responsividade e escalabilidade visual
+Exemplo:
 
-Mesmo sendo um sistema pensado para ambiente local e uso em desktop, a UI deve ser organizada de forma escalável.
+```text
+Confirmar fechamento?
 
-### Deve suportar bem
-
-* janelas médias e grandes
-* listas com muitos registros
-* leitura prolongada
-* navegação estável sem poluição
-
-### Não deve depender de
-
-* efeitos excessivos
-* animações pesadas
-* interfaces apertadas
+Após o fechamento, a composição do rolo será preservada no histórico.
+```
 
 ---
 
-## 22. Identidade e tom da interface
+# 15. Resultado do fechamento
 
-A identidade visual do Nexor deve transmitir:
+Após sucesso, apresentar:
 
-* confiabilidade
-* organização
-* clareza
-* sensação de ferramenta séria
-* fluidez operacional
+- código;
+- quantidade;
+- metragem;
+- máquina;
+- horário;
+- status;
+- arquivos gerados, quando aplicável.
 
-A interface não precisa parecer genérica, mas também não deve competir com a leitura dos dados.
+Ações:
 
----
-
-## 23. Critérios de sucesso da UI
-
-A UI estará no caminho certo quando:
-
-* o operador souber por onde começar rapidamente
-* o fluxo de fechamento de rolo for natural
-* a consulta histórica for rápida
-* as áreas administrativas não atrapalharem a operação
-* o sistema parecer simples mesmo com várias capacidades
-* os erros forem compreensíveis
-* a repetição diária de uso não gerar fadiga desnecessária
+- Abrir pasta;
+- Abrir Rolos;
+- Exportar;
+- Iniciar novo rolo.
 
 ---
 
-## 24. Próximo desdobramento recomendado
+# 16. Tela Rolos
 
-Depois desta especificação, os próximos documentos naturais são:
+## 16.1 Objetivo
 
-* **Wireframe Specification**
-* **Design System / UI Kit básico**
-* **Functional Specification por tela**
+Localizar e consultar registros históricos.
+
+## 16.2 Estrutura
+
+```text
+┌──────────────────────────────────┬──────────────────────┐
+│ Filtros                          │ Detalhes             │
+├──────────────────────────────────┤                      │
+│ Lista de rolos                   │ Resumo               │
+│                                  │ Itens                │
+│                                  │ Eventos              │
+│                                  │ Exportações          │
+└──────────────────────────────────┴──────────────────────┘
+```
+
+## 16.3 Filtros
+
+- período;
+- máquina;
+- tecido;
+- status;
+- código;
+- pedido ou arquivo;
+- limite.
+
+## 16.4 Lista
+
+Colunas:
+
+- código;
+- data;
+- máquina;
+- quantidade;
+- metragem;
+- status.
 
 ---
 
-## 25. Síntese final
+# 17. Painel de detalhes do rolo
 
-A interface do Nexor deve ser construída como extensão natural do fluxo operacional.
+## 17.1 Abas ou seções
 
-Ela precisa ser intuitiva não porque será minimalista por aparência, mas porque cada tela terá função clara, linguagem correta, hierarquia visual consistente e conexão real com o domínio do sistema.
+- Resumo;
+- Itens;
+- Eventos;
+- Exportações.
 
-### Definição final
+## 17.2 Resumo
 
-**UI/UX do Nexor = operação clara + navegação por domínio + baixa fricção + alta legibilidade + segurança nas ações + consistência para uso diário.**
+- código;
+- máquina;
+- data;
+- quantidade;
+- metragem;
+- tecidos;
+- blocos;
+- status;
+- observações.
+
+## 17.3 Itens
+
+- horário;
+- documento;
+- tecido;
+- metragem;
+- arquivo de origem.
+
+## 17.4 Eventos
+
+- data;
+- tipo;
+- descrição;
+- versão.
+
+## 17.5 Exportações
+
+- tipo;
+- modo;
+- data;
+- nome;
+- caminho;
+- reexportação.
+
+---
+
+# 18. Ações da tela Rolos
+
+- copiar código;
+- abrir pasta;
+- reexportar PDF completo;
+- reexportar PDF resumido;
+- reexportar JPG espelhado;
+- atualizar;
+- revisar, futuramente;
+- reabrir, futuramente.
+
+Ações indisponíveis devem ser desabilitadas com explicação.
+
+---
+
+# 19. Configurações
+
+## 19.1 Estrutura
+
+Organizar por seções ou abas:
+
+- Geral;
+- Pastas;
+- Relatórios;
+- Aparência;
+- Diagnóstico.
+
+## 19.2 Geral
+
+- máquina padrão;
+- limite de resultados;
+- comportamento após exportação;
+- confirmações.
+
+## 19.3 Pastas
+
+- origem dos logs;
+- PDF;
+- JPG;
+- pasta temporária.
+
+Cada caminho deve possuir:
+
+- campo;
+- botão Procurar;
+- botão Testar;
+- botão Abrir pasta.
+
+## 19.4 Relatórios
+
+- modo padrão;
+- largura;
+- DPI;
+- padrão de nome.
+
+## 19.5 Aparência
+
+- tema;
+- densidade futura;
+- tamanho de fonte futuro.
+
+## 19.6 Diagnóstico
+
+- versão;
+- banco;
+- logs;
+- pasta local;
+- abrir diretório;
+- copiar informações de suporte.
+
+---
+
+# 20. Tela Sobre
+
+Deve apresentar:
+
+- nome;
+- versão;
+- edição;
+- tecnologia;
+- autor;
+- caminho dos dados;
+- caminho dos logs;
+- licença;
+- link do repositório, quando apropriado;
+- informações da Trial, quando aplicável.
+
+A tela Sobre não deve conter informações falsas ou placeholder de suporte.
+
+---
+
+# 21. Temas
+
+## 21.1 Temas iniciais
+
+- Nexor Dark;
+- Nexor Light;
+- SISBolt.
+
+## 21.2 Recursos semânticos
+
+Usar chaves como:
+
+```text
+AppBackgroundBrush
+SurfaceBrush
+SidebarBackgroundBrush
+TopbarBackgroundBrush
+BorderBrush
+PrimaryBrush
+PrimaryHoverBrush
+TextPrimaryBrush
+TextSecondaryBrush
+TextMutedBrush
+SuccessBrush
+WarningBrush
+DangerBrush
+SelectionBrush
+DisabledBrush
+```
+
+## 21.3 Regras
+
+- evitar cores diretas nas Views;
+- manter contraste;
+- testar todos os estados nos três temas;
+- seleção deve permanecer legível;
+- item inativo não pode parecer selecionado;
+- texto desabilitado deve continuar compreensível.
+
+---
+
+# 22. Tipografia
+
+Fonte preferencial:
+
+```text
+Segoe UI
+```
+
+Escala sugerida:
+
+| Uso | Tamanho |
+|---|---:|
+| Título principal | 20–24 px |
+| Título da tela | 16–18 px |
+| Título de card | 13–15 px |
+| Texto padrão | 12–14 px |
+| Texto secundário | 11–12 px |
+| Badge | 10–11 px |
+
+Evitar:
+
+- fontes decorativas;
+- excesso de negrito;
+- texto muito pequeno;
+- títulos com peso visual exagerado.
+
+---
+
+# 23. Espaçamentos
+
+Escala sugerida:
+
+```text
+4
+8
+12
+16
+20
+24
+32
+```
+
+Usar espaçamentos consistentes entre:
+
+- cards;
+- labels;
+- campos;
+- botões;
+- tabelas;
+- grupos;
+- seções.
+
+Evitar margens arbitrárias diferentes em cada tela.
+
+---
+
+# 24. Botões
+
+## 24.1 Primário
+
+Usado para a principal ação da tela.
+
+Exemplos:
+
+- Revisar rolo;
+- Confirmar fechamento;
+- Salvar configurações.
+
+## 24.2 Secundário
+
+Exemplos:
+
+- Cancelar;
+- Voltar;
+- Atualizar;
+- Abrir pasta.
+
+## 24.3 Perigo
+
+Exemplos:
+
+- Limpar seleção;
+- Excluir, se existir futuramente;
+- Reabrir com impacto.
+
+## 24.4 Regras
+
+- texto direto;
+- verbo no início;
+- não usar textos genéricos como “OK” quando houver alternativa;
+- botão desabilitado deve indicar motivo;
+- ícone não deve substituir texto em ações críticas.
+
+---
+
+# 25. Campos
+
+## Regras
+
+- label sempre visível;
+- placeholder não substitui label;
+- erro próximo ao campo;
+- validação após interação;
+- máscaras somente quando ajudarem;
+- caminho longo deve permitir copiar;
+- campos somente leitura devem parecer diferentes de campos editáveis.
+
+---
+
+# 26. Badges de status
+
+Exemplos:
+
+```text
+Disponível
+Suspeito
+Inválido
+Duplicado
+Selecionado
+Fechado
+Exportado
+Revisado
+```
+
+Badges devem possuir:
+
+- cor;
+- texto;
+- contraste;
+- significado consistente.
+
+---
+
+# 27. Empty states
+
+## Operação sem registros
+
+```text
+Nenhum registro disponível.
+
+Importe arquivos ou selecione uma pasta para começar.
+```
+
+Ação:
+
+```text
+Importar arquivos
+```
+
+## Rolos sem resultado
+
+```text
+Nenhum rolo encontrado para os filtros atuais.
+```
+
+Ação:
+
+```text
+Limpar filtros
+```
+
+## Sem exportações
+
+```text
+Este rolo ainda não possui arquivos exportados.
+```
+
+---
+
+# 28. Loading
+
+Operações demoradas devem apresentar:
+
+- indicador;
+- texto;
+- bloqueio somente da área necessária;
+- possibilidade de cancelamento, quando suportada.
+
+Exemplos:
+
+```text
+Importando arquivos...
+```
+
+```text
+Gerando PDF...
+```
+
+```text
+Carregando rolos...
+```
+
+Não deixar a interface parecer travada.
+
+---
+
+# 29. Mensagens de erro
+
+## Validação
+
+```text
+Selecione pelo menos um item.
+```
+
+## Duplicidade
+
+```text
+O arquivo já foi importado anteriormente.
+```
+
+## Falha técnica
+
+```text
+Não foi possível concluir a operação.
+
+Consulte os logs para obter mais detalhes.
+```
+
+## Regra
+
+Detalhes técnicos devem ir para o log, não para a mensagem principal.
+
+Pode haver botão:
+
+```text
+Copiar detalhes técnicos
+```
+
+quando apropriado.
+
+---
+
+# 30. Modais
+
+Usar modais somente para:
+
+- confirmação sensível;
+- revisão;
+- resultado importante;
+- erro bloqueante;
+- formulário curto.
+
+Evitar modal para:
+
+- toda mensagem de sucesso;
+- filtros;
+- navegação;
+- informações que cabem em painel.
+
+---
+
+# 31. Atalhos de teclado
+
+Sugestões futuras:
+
+```text
+Ctrl + O       Importar arquivos
+Ctrl + Shift + O  Importar pasta
+Ctrl + F       Focar busca
+Ctrl + R       Atualizar
+Esc            Fechar modal ou cancelar
+Enter          Confirmar ação principal
+```
+
+Atalhos não devem conflitar com edição de campos.
+
+---
+
+# 32. Acessibilidade
+
+A interface deve:
+
+- manter contraste adequado;
+- não depender somente de cor;
+- permitir navegação por teclado;
+- exibir foco visível;
+- usar labels;
+- fornecer tooltips;
+- evitar textos minúsculos;
+- permitir leitura clara em Full HD;
+- considerar escalas do Windows acima de 100%.
+
+---
+
+# 33. Responsividade desktop
+
+O Nexor é desktop, mas deve funcionar em diferentes tamanhos de janela.
+
+## Mínimo sugerido
+
+```text
+1320 × 780
+```
+
+## Comportamento
+
+- sidebar fixa ou recolhível futuramente;
+- tabelas ocupam espaço restante;
+- painel lateral possui largura mínima;
+- scroll somente onde necessário;
+- botões críticos não devem desaparecer;
+- modal deve respeitar janela menor.
+
+---
+
+# 34. Persistência de estado
+
+Pode ser persistido:
+
+- tema;
+- tamanho da janela;
+- posição da janela;
+- filtros recentes, quando útil;
+- pasta selecionada;
+- máquina padrão;
+- largura de colunas, futuramente.
+
+Não persistir estados temporários que possam confundir o operador, como uma seleção antiga de rolo, sem decisão explícita.
+
+---
+
+# 35. Critérios de aceite da Home
+
+- ação principal clara;
+- dados reais;
+- cards legíveis;
+- empty state útil;
+- acesso rápido à Operação;
+- alertas visíveis;
+- funcionamento nos três temas.
+
+---
+
+# 36. Critérios de aceite da Operação
+
+- importar pela UI;
+- listar registros;
+- filtrar;
+- selecionar;
+- atualizar resumo;
+- destacar estados;
+- impedir inválidos;
+- revisar;
+- fechar;
+- manter desempenho adequado.
+
+---
+
+# 37. Critérios de aceite da tela Rolos
+
+- listar;
+- filtrar;
+- buscar;
+- selecionar;
+- abrir detalhes;
+- listar itens;
+- listar eventos;
+- listar exportações;
+- copiar código;
+- reexportar.
+
+---
+
+# 38. Critérios de aceite das Configurações
+
+- validar caminhos;
+- salvar;
+- restaurar após reiniciar;
+- testar pastas;
+- trocar tema;
+- informar erro;
+- não perder banco;
+- não exigir edição manual de arquivo.
+
+---
+
+# 39. Screenshots
+
+As imagens oficiais devem ser armazenadas em:
+
+```text
+docs/screenshots/
+```
+
+Nomes recomendados:
+
+```text
+01-home.png
+02-operacao.png
+03-rolos.png
+04-configuracoes.png
+05-sobre.png
+```
+
+Regras:
+
+- usar a interface real;
+- não usar mockup como screenshot final;
+- não reutilizar ListForge;
+- não usar caminhos locais no README;
+- manter imagens atualizadas;
+- remover screenshots antigos quando deixarem de representar a versão.
+
+---
+
+# 40. Implementado e planejado
+
+## Implementado ou parcialmente implementado
+
+- shell principal;
+- sidebar;
+- topbar;
+- status bar;
+- navegação;
+- Home;
+- Operação;
+- Rolos;
+- Configurações;
+- Sobre;
+- temas;
+- persistência de tema;
+- estados visuais iniciais.
+
+## Em desenvolvimento
+
+- importação completa;
+- tabela operacional definitiva;
+- painel de rolo;
+- revisão;
+- fechamento;
+- detalhes históricos;
+- exportações;
+- reexportação.
+
+## Futuro
+
+- Cadastros;
+- Planejamento;
+- Estoque;
+- Analytics;
+- experiência multiestação.
+
+---
+
+# 41. Decisões pendentes
+
+- conjunto definitivo de ícones;
+- biblioteca de ícones;
+- largura final da sidebar;
+- comportamento responsivo;
+- navegação definitiva;
+- uso de abas no detalhe;
+- densidade da tabela;
+- atalhos;
+- confirmação de reabertura;
+- notificações;
+- acessibilidade avançada;
+- suporte a múltiplos monitores;
+- comportamento com escala de 125% e 150%.
+
+---
+
+# 42. Regra final
+
+A interface do Nexor deve tornar evidente:
+
+```text
+o que aconteceu;
+o que está disponível;
+o que foi selecionado;
+o que precisa de atenção;
+o que será fechado;
+o que foi exportado;
+onde consultar depois.
+```
+
+A qualidade da UI não deve ser medida pela quantidade de efeitos visuais, mas pela capacidade de o operador concluir o fluxo com rapidez, segurança e confiança.

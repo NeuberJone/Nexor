@@ -1,6 +1,6 @@
 @echo off
 setlocal
-set "VERSION=0.2.6"
+set "VERSION=0.2.8"
 set "SOURCE=%~dp0..\dist\%VERSION%\installable"
 set "TARGET=%LOCALAPPDATA%\Programs\Nexor"
 if not exist "%SOURCE%\Nexor-v%VERSION%.exe" exit /b 1

@@ -1,7 +1,7 @@
 namespace Nexor.Desktop.Presentation;
 public static class BuildInfo
 {
- public const string Version = "0.2.6";
+ public const string Version = "0.2.8";
 #if TRIAL_EDITION
  public const bool IsTrial = true;
  public const string ProductName = "Nexor Trial";

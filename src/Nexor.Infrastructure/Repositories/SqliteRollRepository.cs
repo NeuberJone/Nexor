@@ -29,10 +29,12 @@ public sealed class SqliteRollRepository : IRollRepository
     {
         using var connection = _context.CreateConnection();
         connection.Open();
-        var roll = connection.QuerySingleOrDefault<Roll>(@"SELECT r.*, COALESCE(SUM(i.EffectiveMeters),0) TotalMeters, COUNT(i.Id) ItemCount FROM Rolls r LEFT JOIN RollItems i ON i.RollId=r.Id WHERE r.Id=@Id GROUP BY r.Id", new { Id = id });
+        var roll = connection.QuerySingleOrDefault<Roll>("SELECT * FROM Rolls WHERE Id=@Id", new { Id = id });
         if (roll is null) return null;
         roll.Items = connection.Query<RollItem>("SELECT * FROM RollItems WHERE RollId=@Id ORDER BY EndTime DESC", new { Id = id }).AsList();
         roll.Events = connection.Query<RollEvent>("SELECT * FROM RollEvents WHERE RollId=@Id ORDER BY Id DESC", new { Id = id }).AsList();
+        roll.TotalMeters = roll.Items.Sum(item => item.EffectiveMeters);
+        roll.ItemCount = roll.Items.Count;
         return roll;
     }
 
@@ -40,14 +42,23 @@ public sealed class SqliteRollRepository : IRollRepository
     {
         using var connection = _context.CreateConnection();
         connection.Open();
-        return connection.Query<Roll>(@"
-            SELECT r.*, COALESCE(SUM(i.EffectiveMeters),0) TotalMeters, COUNT(i.Id) ItemCount FROM Rolls r
-            LEFT JOIN RollItems i ON i.RollId = r.Id
+        var rolls = connection.Query<Roll>(@"
+            SELECT r.* FROM Rolls r
             WHERE (@Machine IS NULL OR r.Machine = @Machine)
               AND (@Search IS NULL OR r.Name LIKE '%' || @Search || '%' OR r.Fabric LIKE '%' || @Search || '%' OR EXISTS (SELECT 1 FROM RollItems s WHERE s.RollId=r.Id AND s.Document LIKE '%' || @Search || '%'))
-            GROUP BY r.Id ORDER BY r.Id DESC
+            ORDER BY r.Id DESC
             LIMIT @Limit
         ", new { Machine = machine, Search = search, Limit = limit }).AsList();
+        if (rolls.Count == 0) return rolls;
+        var metrics = connection.Query<RollMetric>("SELECT RollId, EffectiveMeters FROM RollItems WHERE RollId IN @Ids", new { Ids = rolls.Select(roll => roll.Id).ToArray() }).AsList();
+        var byRoll = metrics.GroupBy(metric => metric.RollId).ToDictionary(group => group.Key, group => (Total: group.Sum(metric => metric.EffectiveMeters), Count: group.Count()));
+        foreach (var roll in rolls)
+        {
+            if (!byRoll.TryGetValue(roll.Id, out var metric)) continue;
+            roll.TotalMeters = metric.Total;
+            roll.ItemCount = metric.Count;
+        }
+        return rolls;
     }
 
     public void AddItem(RollItem item)
@@ -77,5 +88,11 @@ public sealed class SqliteRollRepository : IRollRepository
         connection.Execute(@"
             UPDATE Rolls SET Status = @Status WHERE Id = @RollId
         ", new { Status = status, RollId = id });
+    }
+
+    private sealed class RollMetric
+    {
+        public int RollId { get; set; }
+        public double EffectiveMeters { get; set; }
     }
 }
